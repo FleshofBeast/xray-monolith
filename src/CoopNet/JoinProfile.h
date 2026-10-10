@@ -42,7 +42,8 @@ inline std::vector<std::uint8_t> encode_join_profiles(const std::vector<JoinProf
         if (!valid_join_profile(profile)) throw std::invalid_argument("Invalid saved connection");
         writer.integer(profile.endpoint.size(),1); writer.bytes.insert(writer.bytes.end(),profile.endpoint.begin(),profile.endpoint.end());
         writer.integer(profile.character,8); writer.integer(profile.build.game,8); writer.integer(profile.build.mods,8);
-        const auto resume=encode_welcome(profile.resume); writer.bytes.insert(writer.bytes.end(),resume.begin(),resume.end());
+        auto resume=encode_welcome(profile.resume); resume.resize(29); // Persist the stable credentials prefix, independent of handshake diagnostics.
+        writer.bytes.insert(writer.bytes.end(),resume.begin(),resume.end());
     }
     return writer.bytes;
 }

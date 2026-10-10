@@ -56,6 +56,25 @@ int main() {
             }
         }
     }
+    for(bool allowed:{true,false}) {
+        HostPump guarded; ClientPump first; Identity resume_token=9000; unsigned checks=0;
+        guarded.start(950,1,{10,20},[&]{return ++resume_token;}); guarded.require_character_profile(true);
+        guarded.set_character_handler([](Identity,const InventoryView& profile){return profile.community=="actor_stalker";});
+        guarded.set_resume_character_handler([&](Identity player,Identity character){++checks;return allowed && player==2 && character==2;});
+        auto connection=MemoryTransport::pair(); require(guarded.attach(1,std::move(connection.second)));
+        first.start(std::move(connection.first),2,{10,20});
+        InventoryView selected; selected.actor=2; selected.generation=selected.level=selected.revision=1;selected.community="actor_stalker";
+        first.set_character_profile(selected);
+        for(unsigned n=0;n<8;++n){first.update(.01);guarded.update(.01);} first.update(.01);
+        require(guarded.player_ready(2) && !checks); const auto credentials=first.session().welcome();
+        first.stop();guarded.update(.01);
+        auto resumed=MemoryTransport::pair();require(guarded.attach(2,std::move(resumed.second)));
+        ClientPump returning;returning.start(std::move(resumed.first),2,{10,20},&credentials);
+        for(unsigned n=0;n<8;++n){returning.update(.01);guarded.update(.01);} returning.update(.01);
+        require(checks==1);
+        if(allowed)require(returning.session().state()==ClientState::Connected && guarded.player_ready(2) && returning.session().welcome().generation==2);
+        else require(returning.session().state()==ClientState::Rejected && returning.session().welcome().result==Admission::CharacterRejected);
+    }
     HostPump denied_host; Identity denied_token=8000;
     denied_host.start(901,1,{10,20},[&] { return ++denied_token; });
     denied_host.require_character_profile(true);

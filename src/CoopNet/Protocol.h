@@ -6,7 +6,7 @@
 #include <utility>
 
 namespace coopnet {
-constexpr std::uint16_t protocol_version = 25;
+constexpr std::uint16_t protocol_version = 26;
 constexpr std::size_t max_payload = 16384;
 enum class Mode { Offline, Host, Client };
 enum class Channel : std::uint8_t { Control, Actor, Combat, Inventory, World, AI, Transition };
@@ -93,13 +93,14 @@ inline bool decode(const std::vector<std::uint8_t>& bytes, Frame& output) {
     Reader reader(bytes);
     std::uint64_t magic, version, type, channel, delivery, sequence, length;
     if (!reader.integer(magic, 4) || magic != 0x504f4f43 ||
-        !reader.integer(version, 2) || version != protocol_version ||
+        !reader.integer(version, 2) || !version ||
         !reader.integer(type, 2) || !reader.integer(channel, 1) ||
         !reader.integer(delivery, 1) || !reader.integer(sequence, 4) ||
         !reader.integer(length, 2) || length != reader.remaining()) return false;
     Frame frame{static_cast<Message>(type), static_cast<Channel>(channel),
         static_cast<Delivery>(delivery), static_cast<std::uint32_t>(sequence),
         std::vector<std::uint8_t>(bytes.begin() + 16, bytes.end())};
+    if (version != protocol_version && frame.message != Message::ClientHello && frame.message != Message::ServerHello) return false;
     if (!valid_contract(frame)) return false;
     output = std::move(frame);
     return true;

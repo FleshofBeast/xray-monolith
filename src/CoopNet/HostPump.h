@@ -85,7 +85,9 @@ class HostPump {
     std::function<DialogueView(Identity,const DialogueRequest&,std::uint32_t)> dialogue_handler_;
     std::function<RespawnResult(Identity,const RespawnRequest&)> respawn_handler_;
     std::function<bool(Identity,const InventoryView&)> character_handler_;
+    std::function<bool(Identity,Identity)> resume_character_handler_;
     bool character_required_=false;
+    std::function<void(const ClientHello&,const Welcome&)> rejection_handler_;
     bool reject_character(Peer& peer,Admission reason) {
         peer.rejected=true; peer.elapsed=0;
         return queue(peer,{Message::ServerHello,Channel::Control,Delivery::ReliableOrdered,2,encode_welcome(Welcome{reason})});
@@ -140,6 +142,7 @@ class HostPump {
                 if (!queue(peer, Frame{Message::ServerHello, Channel::Control, Delivery::ReliableOrdered,
                     1, encode_welcome(welcome)})) return false;
                 peer.rejected = welcome.result != Admission::Accepted;
+                if(peer.rejected && rejection_handler_) rejection_handler_(hello,welcome);
                 peer.player = welcome.player; peer.character=hello.character; peer.fresh = !hello.resume_session;
                 peer.elapsed = 0;
             } else if (!peer.rejected && !peer.ready) {
@@ -156,8 +159,15 @@ class HostPump {
                     continue;
                 }
                 if (frame.message != Message::ClientReady || !frame.payload.empty()) return false;
-                if (character_required_ && !peer.character_complete) return reject_character(peer,Admission::CharacterRequired);
                 if (peer.character_started && !peer.character_complete) return false;
+                if (character_required_ && !peer.character_complete) {
+                    // Session::admit has already authenticated this resume token.
+                    // Rejoining from the menu has no loaded local character; the
+                    // runtime must validate its authoritative saved character.
+                    if (peer.fresh || !resume_character_handler_) return reject_character(peer,Admission::CharacterRequired);
+                    if (!resume_character_handler_(peer.player,peer.character)) return reject_character(peer,Admission::CharacterRejected);
+                    peer.character_complete=true;
+                }
                 peer.ready = true; publish();
                 for(const auto& name:names_) if(!queue(peer,{Message::PlayerName,Channel::Control,Delivery::ReliableOrdered,0,encode_player_name({name.first,name.second})})) return false;
             } else if (frame.message == Message::Disconnect && frame.payload.empty()) return false;
@@ -319,6 +329,8 @@ public:
     }
     void set_character_handler(std::function<bool(Identity,const InventoryView&)> handler) { character_handler_=std::move(handler); }
     void require_character_profile(bool required) { character_required_=required; }
+    void set_resume_character_handler(std::function<bool(Identity,Identity)> handler) { resume_character_handler_=std::move(handler); }
+    void set_rejection_handler(std::function<void(const ClientHello&,const Welcome&)> handler) { rejection_handler_=std::move(handler); }
     void set_dialogue_handler(std::function<DialogueView(Identity,const DialogueRequest&,std::uint32_t)> handler) { dialogue_handler_=std::move(handler); }
     bool level_ready(Identity player,std::uint32_t level) const {
         for (const auto& peer:peers_) if (peer.player==player)
@@ -672,7 +684,7 @@ public:
         names_.clear();
         for (auto& peer : peers_) peer.transport->close();
         peers_.clear(); actors_.clear(); actor_generations_.clear(); failures_.clear(); session_.stop(); tokens_ = {}; id_ = 0;
-        items_.clear(); inventory_handler_={}; dialogue_handler_={}; character_handler_={}; character_required_=false;
+        items_.clear(); inventory_handler_={}; dialogue_handler_={}; character_handler_={}; resume_character_handler_={}; rejection_handler_={}; character_required_=false;
         rules_revision_=0; rules_frames_.clear();
         shared_frames_={}; shared_revision_={};
     }

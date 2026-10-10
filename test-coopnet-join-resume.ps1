@@ -1,4 +1,4 @@
-param([ValidateRange(60,180)][int]$Seconds=110,[ValidateRange(60,180)][int]$ResumeSeconds=90,[switch]$AppearanceProbe)
+param([ValidateRange(60,180)][int]$Seconds=110,[ValidateRange(60,180)][int]$ResumeSeconds=90,[switch]$AppearanceProbe,[switch]$MenuLeaveProbe,[switch]$VersionMismatchProbe)
 $ErrorActionPreference='Stop'
 $probeRoot=Join-Path $PSScriptRoot ('_build\coopnet-join-'+[Guid]::NewGuid().ToString('N'))
 foreach ($role in @('host','guest')) {
@@ -27,6 +27,8 @@ function Start-OwnedProbe([string]$Role) {
     $root=Join-Path $probeRoot $Role
     $arguments=@('-silent_error_mode','-noprefetch')
     if($AppearanceProbe){$arguments+='-coop_appearance_probe'}
+    if($MenuLeaveProbe -and $Role -eq 'guest'){$arguments+='-coop_menu_leave_probe'}
+    if($VersionMismatchProbe -and $Role -eq 'guest'){$arguments+='-coop_version_mismatch_probe'}
     Start-Process -FilePath (Join-Path $root 'bin\AnomalyDX11.exe') -WorkingDirectory $root -ArgumentList $arguments -WindowStyle Hidden -PassThru
 }
 function Close-OwnedProbe($Process) {
@@ -47,12 +49,36 @@ try {
     $guestProcess=Start-OwnedProbe 'guest'; $owned+=$guestProcess
     Wait-OwnedPhase @($hostProcess,$guestProcess)
     Close-OwnedProbe $guestProcess
+    if($VersionMismatchProbe) {
+        Close-OwnedProbe $hostProcess
+        $guestLog=Get-Content (Join-Path $probeRoot 'guest/appdata/logs/xray_deadparrot.log') -Raw
+        $hostLog=Get-Content (Join-Path $probeRoot 'host/appdata/logs/xray_deadparrot.log') -Raw
+        if($guestLog -notmatch 'version mismatch popup displayed: Host is using CoopNet 26.*mods 1.*Your version is CoopNet 26.*mods 3' -or
+            $hostLog -notmatch 'radio version mismatch: ".+" attempted to join but a version mismatch was detected' -or
+            ($guestLog+$hostLog) -match 'FATAL ERROR|\[SCRIPT ERROR\]|CoopNet update failed' -or
+            $hostLog -match 'native guest bound:') {throw "Native version rejection notice failed: $probeRoot"}
+        Write-Output "NATIVE_VERSION_MISMATCH_PASS: host radio named the rejected guest; guest returned to the menu and displayed host/local versions. Logs: $probeRoot"
+        return
+    }
     $credentials=Join-Path $probeRoot 'guest\appdata\coopnet-connections.dat'
     if (!(Test-Path -LiteralPath $credentials) -or (Get-Item -LiteralPath $credentials).Length -eq 0) { throw 'Saved encrypted credentials missing.' }
     $firstLog=Get-Content (Join-Path $probeRoot 'guest\appdata\logs\xray_deadparrot.log') -Raw
     if ($firstLog -notmatch 'CoopNet connection credentials saved: generation 1' -or $firstLog -notmatch 'guest arrival placed:' -or $firstLog -match 'FATAL ERROR|\[SCRIPT ERROR\]|CoopNet update failed|CoopNet options .* failed') { throw 'First admission or arrival failed.' }
     Set-Content (Join-Path $probeRoot 'guest-first.log') $firstLog
     Write-Output 'NATIVE_JOIN_CREDENTIALS_PASS: successful join wrote a Windows-encrypted connection profile.'
+    if($MenuLeaveProbe) {
+        Close-OwnedProbe $hostProcess
+        $hostLog=Get-Content (Join-Path $probeRoot 'host/appdata/logs/xray_deadparrot.log') -Raw
+        if($firstLog -notmatch 'menu leave probe: Join reopened after exit' -or
+            $firstLog -notmatch 'menu leave probe: Rejoin last host started' -or
+            $firstLog -notmatch 'Join menu entry inserted above New Game' -or
+            $firstLog -notmatch 'connection credentials saved: generation 2' -or
+            ([regex]::Matches($firstLog,'guest arrival placed:').Count -lt 2) -or
+            ([regex]::Matches($hostLog,'native guest bound:').Count -lt 2) -or
+            ($firstLog+$hostLog) -match 'FATAL ERROR|\[SCRIPT ERROR\]|CoopNet update failed|menu leave probe failed') {throw "Normal menu leave/rejoin failed: $probeRoot"}
+        Write-Output "NATIVE_MENU_LEAVE_REJOIN_PASS: exited through normal disconnect, Join returned above New Game, and Rejoin last host resumed generation 2 and arrived in the host world. Screenshots: $probeRoot"
+        return
+    }
     # The same backend used by the menu now resolves the saved address, character and token.
     @($guestSettings) |
         Set-Content -LiteralPath $guestConfig -Encoding ascii

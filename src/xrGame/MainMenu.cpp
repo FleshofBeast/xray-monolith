@@ -26,6 +26,7 @@ class CCoopJoinDialog : public CUIDialogWnd,public CUIWndCallback {
     CUIEditBox* address;
     CUIStatic* status;
     CUI3tButton* connect;
+    CUI3tButton* rejoin;
     CUIStatic* label(const char* text,float y,float height=28) {
         auto* control=xr_new<CUIStatic>(); control->SetAutoDelete(true); AttachChild(control);
         control->SetWndPos(Fvector2().set(24.f,y)); control->SetWndSize(Fvector2().set(392.f,height));
@@ -33,9 +34,9 @@ class CCoopJoinDialog : public CUIDialogWnd,public CUIWndCallback {
         control->TextItemControl()->SetTextComplexMode(true); control->TextItemControl()->SetText(text);
         return control;
     }
-    CUI3tButton* button(const char* text,float x,float y=310.f) {
+    CUI3tButton* button(const char* text,float y) {
         auto* control=xr_new<CUI3tButton>(); control->SetAutoDelete(true); AttachChild(control);
-        control->InitButton(Fvector2().set(x,y),Fvector2().set(174.f,32.f));
+        control->InitButton(Fvector2().set(24.f,y),Fvector2().set(392.f,32.f));
         control->TextItemControl()->SetFont(UI().Font().pFontLetterica16Russian);
         control->TextItemControl()->SetText(text);
         control->SetStateTextColor(0xffffcc66,S_Highlighted); Register(control); return control;
@@ -58,25 +59,38 @@ class CCoopJoinDialog : public CUIDialogWnd,public CUIWndCallback {
     }
     void xr_stdcall LoadSave(CUIWindow*,void*) { ChooseCharacter(false); }
     void xr_stdcall CreateCharacter(CUIWindow*,void*) { ChooseCharacter(true); }
+    void xr_stdcall Rejoin(CUIWindow*,void*) { RejoinLastHost(); }
 public:
+    void RejoinLastHost() {
+        char saved[64]; engine_coopnet::saved_join_address(saved,sizeof(saved));
+        if(!saved[0]) { status->TextItemControl()->SetText("No previous host saved. Enter an address to join first."); return; }
+        address->SetText(saved); Connect(nullptr,nullptr);
+    }
     CCoopJoinDialog() {
-        SetWndPos(Fvector2().set(292,182)); SetWndSize(Fvector2().set(440,360)); m_bWorkInPause=true;
+        SetWndPos(Fvector2().set(292,114)); SetWndSize(Fvector2().set(440,540)); m_bWorkInPause=true;
         auto* background=xr_new<CUIStatic>(); background->SetAutoDelete(true); AttachChild(background);
-        background->SetWndSize(GetWndSize()); background->InitTexture("ui\\ui_actor_hint_wnd");
-        background->SetTextureRect(Frect().set(0,0,512,256)); background->SetStretchTexture(true);
+        background->SetWndSize(GetWndSize()); background->InitTexture("ui_inGame2_white_rect");
+        background->SetStretchTexture(true);
         background->SetTextureColor(0xf0202020);
+        for(unsigned side=0;side<4;++side) {
+            auto* edge=xr_new<CUIStatic>(); edge->SetAutoDelete(true); AttachChild(edge);
+            edge->SetWndPos(Fvector2().set(side==3?439.f:0.f,side==1?539.f:0.f));
+            edge->SetWndSize(Fvector2().set(side<2?440.f:1.f,side<2?1.f:540.f));
+            edge->InitTexture("ui_inGame2_white_rect"); edge->SetStretchTexture(true); edge->SetTextureColor(0xff808080);
+        }
         label("Join CoopNet",20);
         label("Host IP address (optional :port)",60);
         address=xr_new<CUIEditBox>(); address->SetAutoDelete(true); AttachChild(address);
         address->InitCustomEdit(Fvector2().set(24,92),Fvector2().set(392,32)); address->Init(32);
         address->TextItemControl()->SetFont(UI().Font().pFontLetterica16Russian);
         label("Enter the host IP, then load a save or create a character to join. Connect uses your loaded or remembered CoopNet character.",134,64);
-        auto* load=button("Load save",24,206); auto* create=button("Create character",242,206);
+        auto* load=button("Load save",212); auto* create=button("Create character",252);
         AddCallback(load,BUTTON_CLICKED,CUIWndCallback::void_function(this,&CCoopJoinDialog::LoadSave));
         AddCallback(create,BUTTON_CLICKED,CUIWndCallback::void_function(this,&CCoopJoinDialog::CreateCharacter));
-        status=label("",248,56);
-        connect=button("Connect",24); auto* cancel=button("Cancel",242);
+        connect=button("Connect",292); rejoin=button("Rejoin last host",332); auto* cancel=button("Cancel",372);
+        status=label("",420,96);
         AddCallback(connect,BUTTON_CLICKED,CUIWndCallback::void_function(this,&CCoopJoinDialog::Connect));
+        AddCallback(rejoin,BUTTON_CLICKED,CUIWndCallback::void_function(this,&CCoopJoinDialog::Rejoin));
         AddCallback(cancel,BUTTON_CLICKED,CUIWndCallback::void_function(this,&CCoopJoinDialog::Cancel));
         Show(false);
     }
@@ -89,6 +103,10 @@ public:
     void SendMessage(CUIWindow* window,s16 message,void* data=nullptr) override { OnEvent(window,message,data); }
     void Update() override {
         CUIDialogWnd::Update();
+        address->Enable(!engine_coopnet::guest_settings_locked());
+        connect->Enable(!engine_coopnet::guest_settings_locked());
+        char saved[64]; engine_coopnet::saved_join_address(saved,sizeof(saved));
+        rejoin->Enable(saved[0] && !engine_coopnet::guest_settings_locked());
         if (engine_coopnet::guest_settings_locked()) {
             char text[512]; engine_coopnet::join_status(text,sizeof(text)); status->TextItemControl()->SetText(text);
         }
@@ -98,11 +116,6 @@ public:
         if (action==WINDOW_KEY_PRESSED && (key==DIK_RETURN || key==DIK_NUMPADENTER) && connect->IsEnabled()) { Connect(nullptr,nullptr); return true; }
         return CUIDialogWnd::OnKeyboardAction(key,action);
     }
-};
-class CCoopJoinButton : public CUI3tButton {
-public:
-    void OnClick() override { CUI3tButton::OnClick(); MainMenu()->ShowCoopJoin(); }
-    void Update() override { Enable(!engine_coopnet::shared_world_active()); CUI3tButton::Update(); }
 };
 }
 
@@ -399,13 +412,6 @@ bool CMainMenu::ReloadUI()
 	m_startDialog = smart_cast<CUIDialogWnd*>(dlg);
 	VERIFY(m_startDialog);
 	m_startDialog->m_bWorkInPause = true;
-    if (engine_coopnet::available()) {
-        auto* join=xr_new<CCoopJoinButton>(); join->SetAutoDelete(true); m_startDialog->AttachChild(join);
-        join->InitButton(Fvector2().set(790,48),Fvector2().set(190,36));
-        join->TextItemControl()->SetFont(UI().Font().pFontLetterica18Russian);
-        join->TextItemControl()->SetText("Join CoopNet"); join->SetStateTextColor(0xffffcc66,S_Highlighted);
-        Msg("* CoopNet main menu Join option installed");
-    }
 	m_startDialog->ShowDialog(true);
     if (strstr(Core.Params,"-coop_menu_probe") && !g_pGameLevel) ShowCoopJoin();
     if (!g_pGameLevel && (strstr(Core.Params,"-coop_character_load_menu_probe") || strstr(Core.Params,"-coop_character_create_menu_probe"))) {
@@ -612,6 +618,37 @@ void CMainMenu::StartStopMenu(CUIDialogWnd* pDialog, bool bDoHideIndicators)
 //pureFrame
 void CMainMenu::OnFrame()
 {
+    if(!g_pGameLevel && m_startDialog && m_Flags.test(flActive)) {
+        char mismatch[512];
+        if(engine_coopnet::take_version_mismatch(mismatch,sizeof(mismatch))) {
+            if(m_coopJoinDialog && m_coopJoinDialog->IsShown()) m_coopJoinDialog->HideDialog();
+            m_pMB_ErrDlgs[ErrDifferentVersion]->SetText(mismatch); SetErrorDialog(ErrDifferentVersion);
+            Msg("* CoopNet version mismatch popup displayed: %s",mismatch);
+        }
+    }
+    if(strstr(Core.Params,"-coop_menu_leave_probe")) {
+        static unsigned phase=0; static u32 stamp=0;
+        if(!phase && engine_coopnet::guest_settings_locked() && g_pGameLevel && g_pGameLevel->bReady) {phase=1;stamp=Device.dwTimeContinual;}
+        if(phase==1 && Device.dwTimeContinual-stamp>25000) {
+            phase=2; Engine.Event.Defer("KERNEL:disconnect");
+            Msg("* CoopNet menu leave probe: normal disconnect queued");
+        } else if(phase==2 && !g_pGameLevel) {
+            if(engine_coopnet::shared_world_active()) Msg("! CoopNet menu leave probe failed: session retained");
+            else {ShowCoopJoin(); Msg("* CoopNet menu leave probe: Join reopened after exit");}
+            phase=3;stamp=Device.dwTimeContinual;
+        } else if(phase==3 && Device.dwTimeContinual-stamp>3000 && m_coopJoinDialog) {
+            static_cast<CCoopJoinDialog*>(m_coopJoinDialog)->RejoinLastHost();
+            if(engine_coopnet::guest_settings_locked()) {
+                m_coopJoinDialog->HideDialog(); engine_coopnet::command("coop_movement_probe","auto");
+                Msg("* CoopNet menu leave probe: Rejoin last host started");
+            } else Msg("! CoopNet menu leave probe failed: rejoin not started");
+            phase=4;
+        }
+    }
+    if((strstr(Core.Params,"-coop_menu_probe") || strstr(Core.Params,"-coop_menu_leave_probe")) && m_coopJoinDialog && m_coopJoinDialog->IsShown()) {
+        static unsigned frames=0;
+        if(++frames==60) {Render->Screenshot(IRender_interface::SM_NORMAL); Msg("* CoopNet join dialog screenshot captured");}
+    }
     if (coop_character_selector_open && m_startDialog && m_startDialog->IsShown()) {
         engine_coopnet::cancel_character_join(); coop_character_selector_open=false;
     }

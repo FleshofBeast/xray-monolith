@@ -249,9 +249,10 @@ public:
     void set_world_sink(std::function<void(const WorldState&)> sink) { world_sink_=std::move(sink); }
     void set_party_sink(std::function<void(const PartyStatus&)> sink) { party_sink_=std::move(sink); }
     const PartyStatus& party_status() const { return party_status_; }
-    void start(std::unique_ptr<Transport> transport, Identity character, BuildIdentity build,const Welcome* saved=nullptr) {
+    void start(std::unique_ptr<Transport> transport, Identity character, BuildIdentity build,const Welcome* saved=nullptr,const std::string& name="Player") {
         if (!transport) throw std::invalid_argument("Missing client transport");
-        attach(std::move(transport), saved ? session_.begin_saved(character,build,*saved) : session_.begin(character, build));
+        auto hello=saved ? session_.begin_saved(character,build,*saved) : session_.begin(character,build);
+        hello.name=name; attach(std::move(transport),hello);
     }
     void reconnect(std::unique_ptr<Transport> transport) {
         if (!transport) throw std::invalid_argument("Missing reconnect transport");

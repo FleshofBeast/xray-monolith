@@ -41,6 +41,8 @@ void exercise_appearance_probe(std::uint16_t object,double elapsed);
 bool character_selection_ready();
 bool place_local_actor(std::uint32_t level,const float* position,const float* velocity);
 bool show_session_join_news(const std::string& name);
+bool show_session_mismatch_news(const std::string& name);
+void return_to_main_menu();
 bool set_local_player_name(const std::string& name);
 void exercise_player_name_probe(double elapsed);
 void set_player_nameplates(const std::vector<PlayerNameplate>& labels);

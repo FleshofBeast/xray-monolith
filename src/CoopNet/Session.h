@@ -1,5 +1,6 @@
 #pragma once
 #include "Protocol.h"
+#include "PlayerName.h"
 #include <array>
 namespace coopnet {
 using Connection = std::uint64_t;
@@ -8,12 +9,16 @@ struct ClientHello {
     std::uint16_t version = protocol_version;
     BuildIdentity build;
     Identity character = 0, resume_session = 0, resume_player = 0, resume_token = 0;
+    std::string name = "Player";
 };
 inline std::vector<std::uint8_t> encode_hello(const ClientHello& hello) {
     Writer writer;
     writer.integer(hello.version, 2);
     for (auto value : {hello.build.game, hello.build.mods, hello.character,
         hello.resume_session, hello.resume_player, hello.resume_token}) writer.integer(value, 8);
+    if (!valid_player_name(hello.name)) throw std::invalid_argument("Invalid handshake name");
+    writer.integer(hello.name.size(),1);
+    for(unsigned char c:hello.name) writer.integer(c,1);
     return writer.bytes;
 }
 inline bool decode_hello(const std::vector<std::uint8_t>& bytes, ClientHello& hello) {
@@ -21,7 +26,14 @@ inline bool decode_hello(const std::vector<std::uint8_t>& bytes, ClientHello& he
     if (!reader.integer(version, 2) || !reader.integer(value.build.game, 8) ||
         !reader.integer(value.build.mods, 8) || !reader.integer(value.character, 8) ||
         !reader.integer(value.resume_session, 8) || !reader.integer(value.resume_player, 8) ||
-        !reader.integer(value.resume_token, 8) || reader.remaining()) return false;
+        !reader.integer(value.resume_token, 8)) return false;
+    if(reader.remaining()) {
+        std::uint64_t length,c;
+        if(!reader.integer(length,1) || length>64 || length!=reader.remaining()) return false;
+        value.name.clear();
+        for(unsigned i=0;i<length;++i) { if(!reader.integer(c,1)) return false; value.name.push_back(static_cast<char>(c)); }
+        if(!valid_player_name(value.name)) return false;
+    }
     value.version = static_cast<std::uint16_t>(version); hello = value; return true;
 }
 struct Player {
@@ -36,6 +48,8 @@ struct Welcome {
     Admission result = Admission::Invalid;
     Identity session = 0, player = 0, resume_token = 0;
     std::uint32_t generation = 0;
+    std::uint16_t host_version = protocol_version;
+    BuildIdentity host_build;
 };
 class HostSession {
     Mode mode_ = Mode::Offline;
@@ -54,7 +68,7 @@ public:
         players_[0] = Player{1, character, 0, 0, 1, true}; mode_ = Mode::Host;
     }
     Welcome admit(Connection connection, const ClientHello& hello, Identity token) {
-        auto reject = [](Admission reason) { return Welcome{reason, 0, 0, 0, 0}; };
+        auto reject = [this](Admission reason) { Welcome value{reason,0,0,0,0}; value.host_build=build_; return value; };
         if (mode_ != Mode::Host) return reject(Admission::WrongMode);
         if (!connection || !hello.character) return reject(Admission::Invalid);
         if (hello.version != protocol_version) return reject(Admission::VersionMismatch);
@@ -105,13 +119,19 @@ inline std::vector<std::uint8_t> encode_welcome(const Welcome& welcome) {
     writer.integer(static_cast<unsigned>(welcome.result), 1);
     writer.integer(welcome.session, 8); writer.integer(welcome.player, 8);
     writer.integer(welcome.resume_token, 8); writer.integer(welcome.generation, 4);
+    writer.integer(welcome.host_version,2); writer.integer(welcome.host_build.game,8); writer.integer(welcome.host_build.mods,8);
     return writer.bytes;
 }
 inline bool decode_welcome(const std::vector<std::uint8_t>& bytes, Welcome& output) {
     Reader reader(bytes); Welcome value; std::uint64_t result, generation;
     if (!reader.integer(result, 1) || result > static_cast<unsigned>(Admission::CharacterRequired) ||
         !reader.integer(value.session, 8) || !reader.integer(value.player, 8) ||
-        !reader.integer(value.resume_token, 8) || !reader.integer(generation, 4) || reader.remaining()) return false;
+        !reader.integer(value.resume_token, 8) || !reader.integer(generation, 4)) return false;
+    if(reader.remaining()) {
+        std::uint64_t version;
+        if(!reader.integer(version,2) || !reader.integer(value.host_build.game,8) || !reader.integer(value.host_build.mods,8) || reader.remaining()) return false;
+        value.host_version=static_cast<std::uint16_t>(version);
+    }
     value.result = static_cast<Admission>(result); value.generation = static_cast<std::uint32_t>(generation);
     if (value.result == Admission::Accepted) {
         if (!value.session || value.player < 2 || !value.resume_token || !value.generation) return false;

@@ -280,6 +280,16 @@ bool show_session_join_news(const std::string& name) {
     g_actor->AddGameNews(news);
     Msg("* CoopNet radio join announcement: %s",text.c_str()); return true;
 }
+void return_to_main_menu() { Engine.Event.Defer("KERNEL:disconnect"); }
+bool show_session_mismatch_news(const std::string& name) {
+    LocalActorPose local;
+    if(!coopnet::valid_player_name(name) || !capture_local_actor(local) || !CurrentGameUI() ||
+        !CurrentGameUI()->m_pMessagesWnd || !g_actor->game_news_registry) return false;
+    GAME_NEWS_DATA news; news.news_caption="CoopNet";
+    const std::string text="\""+name+"\" attempted to join but a version mismatch was detected.";
+    news.news_text=text.c_str(); news.texture_name="ui_inGame2_PDA_icon"; g_actor->AddGameNews(news);
+    Msg("* CoopNet radio version mismatch: %s",text.c_str()); return true;
+}
 void exercise_player_name_probe(double elapsed) {
     const bool host=strstr(Core.Params,"-coop_nameplate_host_probe")!=nullptr;
     if(!host && !strstr(Core.Params,"-coop_nameplate_guest_probe")) return;

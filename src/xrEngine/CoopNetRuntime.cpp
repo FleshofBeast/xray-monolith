@@ -36,6 +36,7 @@ namespace {
 std::vector<coopnet::JoinProfile> join_profiles;
 bool profiles_loaded=false;
 std::string menu_join_error;
+std::string version_mismatch_notice;
 std::string pending_character_address;
 std::uint64_t pending_character_incarnation=0;
 std::uint64_t pending_ready_incarnation=0;
@@ -1211,6 +1212,20 @@ void update(double) {
         } else {
             session->loot_retries.advance(elapsed);
             session->client.update(elapsed);
+            if(session->client.session().state()==coopnet::ClientState::Rejected) {
+                const auto& rejection=session->client.session().welcome();
+                if(rejection.result==coopnet::Admission::VersionMismatch || rejection.result==coopnet::Admission::BuildMismatch) {
+                    std::ostringstream text;
+                    text<<"Host is using CoopNet "<<rejection.host_version;
+                    if(rejection.result==coopnet::Admission::BuildMismatch) text<<" (game "<<rejection.host_build.game<<", mods "<<rejection.host_build.mods<<")";
+                    text<<". Your version is CoopNet "<<coopnet::protocol_version;
+                    if(rejection.result==coopnet::Admission::BuildMismatch) text<<" (game "<<session->build.game<<", mods "<<session->build.mods<<")";
+                    text<<". Install the same CoopNet release and matching mods.";
+                    version_mismatch_notice=text.str();
+                    Msg("! CoopNet version mismatch: %s",version_mismatch_notice.c_str());
+                    cancel_character_join(); stop(); return_to_main_menu(); return;
+                }
+            }
             if (session->client.session().state()!=coopnet::ClientState::Connected) session->loot_retries.clear();
             update_host_world_rules();
             exercise_respawn_probe(*session,elapsed);
@@ -1233,7 +1248,7 @@ void update(double) {
                 session->client.stop();
                 const auto connection=session->runtime.connect(session->endpoint.c_str());
                 if (connection!=k_HSteamNetConnection_Invalid)
-                    session->client.start(std::make_unique<coopnet::GnsTransport>(session->runtime,connection),session->host_character,session->build);
+                    session->client.start(std::make_unique<coopnet::GnsTransport>(session->runtime,connection),session->host_character,session->build,nullptr,session->local_player_name);
                 Msg("* CoopNet saved session expired; retrying saved character with new host session");
             } else if (connection_state==coopnet::ClientState::Disconnected || connection_state==coopnet::ClientState::Offline) {
                 session->reconnect_wait+=elapsed;
@@ -1243,7 +1258,7 @@ void update(double) {
                     if (connection!=k_HSteamNetConnection_Invalid) {
                         auto transport=std::make_unique<coopnet::GnsTransport>(session->runtime,connection);
                         if (connection_state==coopnet::ClientState::Disconnected) session->client.reconnect(std::move(transport));
-                        else session->client.start(std::move(transport),session->host_character,session->build);
+                        else session->client.start(std::move(transport),session->host_character,session->build,nullptr,session->local_player_name);
                         session->world_load_requested=false;
                         Msg("* CoopNet connection retry: %s",connection_state==coopnet::ClientState::Disconnected ? "resume" : "initial join");
                     }
@@ -1453,6 +1468,10 @@ void command(const char* name, const char* arguments) {
             next->host.start(random_identity(), character, build, random_identity);
             next->host.require_character_profile(strstr(GetCommandLineA(),"-coop_engine_fixture")==nullptr);
             auto* owner=next.get();
+            next->host.set_rejection_handler([](const coopnet::ClientHello& hello,const coopnet::Welcome& welcome) {
+                if(welcome.result==coopnet::Admission::VersionMismatch || welcome.result==coopnet::Admission::BuildMismatch)
+                    show_session_mismatch_news(hello.name);
+            });
             next->host.set_character_handler([owner](coopnet::Identity player,const coopnet::InventoryView& character) {
                 if (!validate_join_character(character)) return false;
                 if (!faction_matches_host(character.community)) {
@@ -1473,6 +1492,19 @@ void command(const char* name, const char* arguments) {
             next->host.set_inventory_handler([owner](coopnet::Identity player,const coopnet::InventoryRequest& request) {
                 return transact_inventory(*owner,player,request);
             });
+            next->host.set_resume_character_handler([owner](coopnet::Identity player,coopnet::Identity character) {
+                bool matches=false;
+                for(const auto& participant:owner->host.session().players())
+                    if(participant.id==player && participant.character==character) matches=true;
+                if(!matches)return false;
+                load_guest_save(*owner,character);
+                const auto saved=owner->guest_inventory.find(character);
+                if(saved==owner->guest_inventory.end() || saved->second.community.empty() || !faction_matches_host(saved->second.community)) {
+                    Msg("! CoopNet saved reconnect rejected: authoritative character missing or faction differs from host"); return false;
+                }
+                Msg("* CoopNet saved reconnect character validated: character %llu faction %s",character,saved->second.community.c_str());
+                return true;
+            });
             next->host.set_dialogue_handler([owner](coopnet::Identity player,const coopnet::DialogueRequest& request,std::uint32_t revision) {
                 coopnet::DialogueView view{request.actor,request.target,request.incarnation,request.generation,request.level,revision,true,{}};
                 const auto guest=owner->guests.find(player);
@@ -1489,7 +1521,9 @@ void command(const char* name, const char* arguments) {
             for (const auto& profile:join_profiles) if (profile.endpoint==endpoint && profile.character==character &&
                 profile.build.game==build.game && profile.build.mods==build.mods) { saved=&profile.resume; break; }
             next->saved_resume_attempt=saved!=nullptr;
-            next->client.start(std::make_unique<coopnet::GnsTransport>(next->runtime, connection), character, build,saved);
+            if(strstr(GetCommandLineA(),"-coop_version_mismatch_probe")) build.mods^=2;
+            next->build=build;
+            next->client.start(std::make_unique<coopnet::GnsTransport>(next->runtime, connection), character, build,saved,next->local_player_name);
             coopnet::InventoryView selected_character;
             if (capture_join_character(selected_character)) {
                 selected_character.actor=character; next->client.set_character_profile(selected_character);
@@ -1720,12 +1754,17 @@ void join_status(char* output,unsigned capacity) {
     }
     snprintf(output,capacity,"%s",status);
 }
+bool take_version_mismatch(char* output,unsigned capacity) {
+    if(!output || !capacity || version_mismatch_notice.empty()) return false;
+    snprintf(output,capacity,"%s",version_mismatch_notice.c_str()); version_mismatch_notice.clear(); return true;
+}
 }
 #else
 namespace engine_coopnet {
 void update(double) {}
 void stop() {}
 bool available() { return false; }
+bool take_version_mismatch(char*,unsigned) { return false; }
 bool guest_settings_locked() { return false; }
 bool world_setting_command(const char*) { return false; }
 void register_world_setting_command(const char*) {}

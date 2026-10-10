@@ -40,8 +40,19 @@ int main() {
     hello = ClientHello{protocol_version, {10,20}, 103,0,0,0};
     require(host.admit(12, hello, 4000).player == 5);
     auto bytes = encode_hello(hello);
-    for (std::size_t n = 0; n < bytes.size(); ++n)
+    for (std::size_t n = 0; n < bytes.size(); ++n) if(n!=50)
         require(!decode_hello(std::vector<std::uint8_t>(bytes.begin(), bytes.begin() + n), decoded));
+    require(decode_hello(std::vector<std::uint8_t>(bytes.begin(),bytes.begin()+50),decoded) && decoded.name=="Player");
+    hello.name="MismatchGuest"; hello.version=protocol_version-1;
+    require(decode_hello(encode_hello(hello),decoded) && decoded.name=="MismatchGuest");
+    auto mismatch=host.admit(77,decoded,7777); Welcome decodedMismatch;
+    require(mismatch.result==Admission::VersionMismatch && decode_welcome(encode_welcome(mismatch),decodedMismatch));
+    require(decodedMismatch.host_version==protocol_version && decodedMismatch.host_build.game==10 && decodedMismatch.host_build.mods==20);
+    auto mismatchFrame=encode(Frame{Message::ClientHello,Channel::Control,Delivery::ReliableOrdered,1,encode_hello(hello)});
+    mismatchFrame[4]=static_cast<std::uint8_t>(protocol_version-1);
+    require(decode(mismatchFrame,received));
+    mismatchFrame[6]=static_cast<std::uint8_t>(Message::ClientReady);
+    require(!decode(mismatchFrame,received));
     bytes.push_back(0); require(!decode_hello(bytes, decoded));
     for (unsigned i = 0; i < 64; ++i) require(endpoints.first->send(frame) == SendResult::Sent);
     require(endpoints.first->send(frame) == SendResult::Backpressure);
@@ -131,5 +142,18 @@ int main() {
     host_pump.update(10); require(!abandoned.first->connected());
     host_pump.stop(); first.update(.01);
     require(first.session().state() == ClientState::Disconnected);
+    HostPump mismatchHost; ClientPump mismatchGuest;
+    mismatchHost.start(88,1,{10,20},[] {return Identity(9000);});
+    unsigned mismatchNotices=0;
+    mismatchHost.set_rejection_handler([&](const ClientHello& attempt,const Welcome& reply) {
+        require(attempt.name=="MismatchGuest" && reply.result==Admission::BuildMismatch);
+        ++mismatchNotices;
+    });
+    auto mismatchLink=MemoryTransport::pair();
+    require(mismatchHost.attach(44,std::move(mismatchLink.second)));
+    mismatchGuest.start(std::move(mismatchLink.first),2,{10,21},nullptr,"MismatchGuest");
+    for(unsigned i=0;i<5;++i) {mismatchGuest.update(.01);mismatchHost.update(.01);}
+    require(mismatchNotices==1 && mismatchGuest.session().state()==ClientState::Rejected);
+    require(mismatchGuest.session().welcome().host_build.mods==20 && mismatchGuest.session().welcome().host_version==protocol_version);
     std::cout << "CoopNet admission, identity, reconnect and queue-bound tests passed\n";
 }

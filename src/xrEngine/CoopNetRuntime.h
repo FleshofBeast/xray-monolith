@@ -16,6 +16,7 @@ bool queue_character_join(const char* address,bool create);
 void cancel_character_join();
 void saved_join_address(char* output,unsigned capacity);
 void join_status(char* output,unsigned capacity);
+bool take_version_mismatch(char* output,unsigned capacity);
 bool simulation_active();
 bool shared_world_active();
 bool party_level_change_allowed();

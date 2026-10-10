@@ -1451,6 +1451,13 @@ void CApplication::OnEvent(EVENT E, u64 P1, u64 P2)
 	}
 	else if (E == eDisconnect)
 	{
+		// World loads and party travel queue a new start; returning to the
+		// menu must release the session before its Join option is rebuilt.
+		if (!Engine.Event.Peek("KERNEL:start") && !Engine.Event.Peek("KERNEL:load"))
+		{
+			engine_coopnet::cancel_character_join();
+			engine_coopnet::stop();
+		}
 		ls_header[0] = '\0';
 		ls_tip_number[0] = '\0';
 		ls_tip[0] = '\0';

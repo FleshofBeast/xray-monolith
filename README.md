@@ -8,7 +8,7 @@ Get the required base game: [Anomaly 1.5.3 full download on ModDB](https://www.m
 
 **Looking to play CoopNet? Start with the [installation and multiplayer setup guide](INSTALL-COOPNET.md).** It covers building the `coopnet` branch, installing into Anomaly 1.5.3, hosting, joining, and UDP port forwarding. This source repository is not a full game download; the CoopNet guide takes precedence over the inherited upstream executable installation instructions below.
 
-**[Download the compiled DX11 early-test build](https://github.com/FleshofBeast/FOBs-Anomaly-CoopNet/releases/tag/coopnet-early-test-equipment)** — no compiler required. Choose the `FOBs-Anomaly-CoopNet-EarlyTest-DX11-Equipment.zip` asset and follow its `INSTALL.txt`. All players need the same package; the Anomaly 1.5.3 base game is still required separately.
+**[Download the compiled DX11 early-test build](https://github.com/FleshofBeast/FOBs-Anomaly-CoopNet/releases/tag/coopnet-early-test-rejoin-menu)** — no compiler required. Choose the `FOBs-Anomaly-CoopNet-EarlyTest-DX11-RejoinMenu.zip` asset and follow its `INSTALL.txt`. All players need the same package; the Anomaly 1.5.3 base game is still required separately.
 
 ## CoopNet: host, join, and port forwarding
 
@@ -23,7 +23,7 @@ coop_status
 
 Syntax: `coop_host <UDP-port> <character-id> <game-fingerprint> <mod-fingerprint>`. All four arguments are required. Choose a port from 1–65535; `27888` is the menu/help default. Each player needs a different nonzero character ID (for example, host `1`, guests `2`, `3`, `4`). Both fingerprints must match on every client. The example `1 1` values are manual test identifiers; they do not automatically check your installed files.
 
-Guests can use **Main Menu → Join CoopNet** and enter `HOST-IP:27888`, then choose **Load save** or **Create character**. The console equivalent is:
+Guests can use **Main Menu → Join CoopNet**, above **New Game**, and enter `HOST-IP:27888`, then choose **Load save** or **Create character**. The dialog stacks its options vertically. **Rejoin last host** uses the last saved host address and connection credentials after leaving a session. Mismatched CoopNet protocol or manual game/mod identifiers are rejected: the host radio names the attempted join, and the guest returns to the menu with host and guest version details. Both clients need this notification-capable build; older executables cannot display the new popup. The console equivalent is:
 
 ```text
 coop_join HOST-IP:27888 2 1 1
