@@ -104,6 +104,8 @@ If you host on a different port, use it in every command and forwarding rule. TC
 
 Enter `/help` in the game console for available commands. Hosting uses `coop_host`, not `/host`. Use `coop_status` to inspect the session, `coop_disconnect` to leave or stop hosting, and `coop_respawn` to respawn at a living teammate when downed.
 
+The death screen lists session teammates. Click a living player's name to follow them in third person; A/D cycles available living teammates. Stay in spectator mode as long as you like, then press Enter to respawn at that player's current position. Downed teammates cannot be selected. If your target dies or disconnects, another living teammate is selected when available; if everyone is down, respawn is unavailable. Escape opens the main menu. This requires matching protocol-28 builds on every player.
+
 The host controls the shared world settings, and players travel between locations together. Selected guest saves transfer faction, inventory, equipment, and rubles. Saved reputation/rank, faction goodwill and identifiable named-NPC goodwill now transfer with the selected character; unrelated random NPCs from a private world are not matched by their numeric IDs. Fresh characters use solo faction defaults; a fresh Free Stalker should not make Wolf hostile. Not every mutant's specialized ability or modded AI script has been verified. Host-completed quests share money, awarded items and reputation/goodwill changes once per participating character. Scripted story/guest turn-in paths remain experimental; this is a testing build, not a complete co-op release. See [current progress and test evidence](docs/coop/PROGRESS.md).
 
 ## Character saves and backups

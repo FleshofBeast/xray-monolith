@@ -27,40 +27,85 @@
 #include "ui/UI3tButton.h"
 #include "ui/UIStatic.h"
 #include "ui/UIWndCallback.h"
+#include "ui/UIListBox.h"
+#include "ui/UIListBoxItem.h"
 #include <dinput.h>
 
 namespace {
 class CCoopRespawnDialog : public CUIDialogWnd,public CUIWndCallback {
-    CUI3tButton* respawn;
+    CUIListBox* players;
+    ui_shader panel_shader;
     CUIStatic* status;
-    void xr_stdcall Respawn(CUIWindow*,void*) { engine_coopnet::request_respawn(); }
+    std::vector<engine_coopnet::SpectatorPlayer> roster;
+    void xr_stdcall Select(CUIWindow*,void*) {
+        const auto index=players->GetSelectedIDX();
+        if (index<roster.size() && roster[index].alive) engine_coopnet::select_spectator(roster[index].entity,roster[index].generation);
+    }
+    void Cycle(int direction) {
+        if (roster.empty()) return;
+        int start=-1;
+        for (unsigned i=0;i<roster.size();++i) if (roster[i].entity==engine_coopnet::spectator_target()) start=static_cast<int>(i);
+        if (start<0) start=direction>0 ? -1 : 0;
+        for (unsigned step=1;step<=roster.size();++step) {
+            const auto index=static_cast<unsigned>((start+direction*static_cast<int>(step)+static_cast<int>(roster.size())*2)%static_cast<int>(roster.size()));
+            if (roster[index].alive && engine_coopnet::select_spectator(roster[index].entity,roster[index].generation)) { players->SetSelectedIDX(index); return; }
+        }
+    }
 public:
     CCoopRespawnDialog() {
-        SetWndPos(Fvector2().set(312,250)); SetWndSize(Fvector2().set(400,230));
-        auto* background=xr_new<CUIStatic>(); background->SetAutoDelete(true); AttachChild(background);
-        background->SetWndSize(GetWndSize()); background->InitTexture("ui\\ui_actor_hint_wnd");
-        background->SetTextureRect(Frect().set(0,0,512,256)); background->SetStretchTexture(true); background->SetTextureColor(0xf0202020);
+        panel_shader->create("hud\\crosshair");
+        SetWndPos(Fvector2().set(24,180)); SetWndSize(Fvector2().set(310,390));
         auto* title=xr_new<CUIStatic>(); title->SetAutoDelete(true); AttachChild(title);
-        title->SetWndPos(Fvector2().set(24,20)); title->SetWndSize(Fvector2().set(352,32));
-        title->TextItemControl()->SetFont(UI().Font().pFontLetterica18Russian); title->TextItemControl()->SetText("You died");
+        title->SetWndPos(Fvector2().set(18,16)); title->SetWndSize(Fvector2().set(274,32));
+        title->TextItemControl()->SetFont(UI().Font().pFontLetterica18Russian); title->TextItemControl()->SetText("Spectate teammates");
         status=xr_new<CUIStatic>(); status->SetAutoDelete(true); AttachChild(status);
-        status->SetWndPos(Fvector2().set(24,66)); status->SetWndSize(Fvector2().set(352,84));
+        status->SetWndPos(Fvector2().set(18,300)); status->SetWndSize(Fvector2().set(274,80));
         status->TextItemControl()->SetFont(UI().Font().pFontLetterica16Russian); status->TextItemControl()->SetTextComplexMode(true);
-        respawn=xr_new<CUI3tButton>(); respawn->SetAutoDelete(true); AttachChild(respawn);
-        respawn->InitButton(Fvector2().set(108,164),Fvector2().set(184,36));
-        respawn->TextItemControl()->SetFont(UI().Font().pFontLetterica18Russian); respawn->TextItemControl()->SetText("Respawn");
-        respawn->SetStateTextColor(0xffffcc66,S_Highlighted); respawn->SetStateTextColor(0xff969696,S_Disabled);
-        Register(respawn); AddCallback(respawn,BUTTON_CLICKED,CUIWndCallback::void_function(this,&CCoopRespawnDialog::Respawn));
+        players=xr_new<CUIListBox>(); players->SetAutoDelete(true); AttachChild(players);
+        players->SetWndPos(Fvector2().set(18,58)); players->SetWndSize(Fvector2().set(274,226));
+        players->SetFont(UI().Font().pFontLetterica16Russian); players->SetTextColor(0xffeeeeee); players->SetItemHeight(28);
+        Register(players); AddCallback(players,LIST_ITEM_CLICKED,CUIWndCallback::void_function(this,&CCoopRespawnDialog::Select));
         Show(false);
+    }
+    void Draw() override {
+        Frect panel; GetAbsoluteRect(panel); UI().ClientToScreenScaled(panel.lt); UI().ClientToScreenScaled(panel.rb);
+        UIRender->SetShader(*panel_shader);
+        UIRender->StartPrimitive(6,IUIRender::ptTriList,IUIRender::pttTL);
+        const u32 color=0xd9181d22;
+        UIRender->PushPoint(panel.x1,panel.y1,0,color,0,0); UIRender->PushPoint(panel.x2,panel.y1,0,color,0,0); UIRender->PushPoint(panel.x2,panel.y2,0,color,0,0);
+        UIRender->PushPoint(panel.x1,panel.y1,0,color,0,0); UIRender->PushPoint(panel.x2,panel.y2,0,color,0,0); UIRender->PushPoint(panel.x1,panel.y2,0,color,0,0);
+        UIRender->FlushPrimitive();
+        CUIDialogWnd::Draw();
     }
     void SendMessage(CUIWindow* window,s16 message,void* data=nullptr) override { OnEvent(window,message,data); }
     void Update() override {
-        CUIDialogWnd::Update(); respawn->Enable(engine_coopnet::can_respawn());
-        char text[256]; engine_coopnet::respawn_status(text,sizeof(text)); status->TextItemControl()->SetText(text);
+        auto current=engine_coopnet::spectator_players(); bool changed=current.size()!=roster.size();
+        if (!changed) for (unsigned i=0;i<current.size();++i) if (current[i].entity!=roster[i].entity || current[i].generation!=roster[i].generation || current[i].name!=roster[i].name || current[i].alive!=roster[i].alive) changed=true;
+        if (changed) {
+            roster=std::move(current); players->Clear();
+            for (const auto& player:roster) {
+                auto* item=players->AddItem(); item->SetWndSize(Fvector2().set(264,28));
+                item->SetText(player.name.c_str()); item->SetTextColor(player.alive ? 0xffeeeeee : 0xff707070); item->Enable(player.alive);
+            }
+        }
+        bool valid=false;
+        for (unsigned i=0;i<roster.size();++i) if (roster[i].alive && roster[i].entity==engine_coopnet::spectator_target()) { valid=true; players->SetSelectedIDX(i); }
+        if (!valid && engine_coopnet::spectator_target()) { engine_coopnet::clear_spectator(); Cycle(1); }
+        if (strstr(Core.Params,"-coop_respawn_spectator_probe") && engine_coopnet::player_downed() && !engine_coopnet::spectator_target()) {
+            for (unsigned i=0;i<roster.size();++i) if (roster[i].alive) {
+                players->SetSelectedIDX(i); Select(nullptr,nullptr);
+                OnKeyboardAction(DIK_A,WINDOW_KEY_PRESSED); OnKeyboardAction(DIK_D,WINDOW_KEY_PRESSED);
+                Msg("* CoopNet spectator UI probe: player selection and A/D cycle passed"); break;
+            }
+        }
+        const char* text=engine_coopnet::spectator_target() ? "A / D: switch player\nEnter: respawn at this player\nEsc: main menu" : "Click a living player's name to spectate.\nA / D: select player\nWaiting if no teammates are alive.";
+        status->TextItemControl()->SetText(text);
+        CUIDialogWnd::Update();
     }
     bool OnKeyboardAction(int key,EUIMessages action) override {
-        if (action==WINDOW_KEY_PRESSED && key==DIK_ESCAPE) { HideDialog(); MainMenu()->Activate(true); return true; }
-        if (action==WINDOW_KEY_PRESSED && (key==DIK_RETURN || key==DIK_NUMPADENTER)) { if (respawn->IsEnabled()) Respawn(nullptr,nullptr); return true; }
+        if (action==WINDOW_KEY_PRESSED && key==DIK_ESCAPE) { engine_coopnet::clear_spectator(); HideDialog(); MainMenu()->Activate(true); return true; }
+        if (action==WINDOW_KEY_PRESSED && (key==DIK_A || key==DIK_D)) { Cycle(key==DIK_A ? -1 : 1); return true; }
+        if (action==WINDOW_KEY_PRESSED && (key==DIK_RETURN || key==DIK_NUMPADENTER)) { if (engine_coopnet::spectator_target()) engine_coopnet::request_respawn(); return true; }
         return CUIDialogWnd::OnKeyboardAction(key,action);
     }
 };
@@ -115,7 +160,7 @@ void CUIGameSP::OnFrame()
             HideShownDialogs(); CoopRespawnWnd->ShowDialog(false);
             Msg("* CoopNet Respawn dialog opened");
         }
-    } else if (CoopRespawnWnd && CoopRespawnWnd->IsShown()) CoopRespawnWnd->HideDialog();
+    } else if (CoopRespawnWnd && CoopRespawnWnd->IsShown()) { CoopRespawnWnd->HideDialog(); engine_coopnet::clear_spectator(); }
 
 	if (Device.Paused()) return;
 

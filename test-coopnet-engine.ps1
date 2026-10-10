@@ -255,6 +255,10 @@ if ($SettingsProbe) {
     Write-Output 'NATIVE_HOST_SETTINGS_PASS: host rules and clock applied; guest console and scripted world-state changes rejected.'
 }
 if ($RespawnProbe) {
+    foreach ($role in @('host','guest')) {
+        if ($logs[$role] -notmatch 'spectator UI probe: player selection and A/D cycle passed' -or
+            $logs[$role] -notmatch 'third-person spectator camera applied: entity [1-9][0-9]*') { throw "$role spectator UI/camera evidence missing." }
+    }
     if ($logs.guest -notmatch 'CoopNet respawn probe: guest local death ignored until host confirmation') { throw 'Guest local death authority guard evidence missing.' }
     if ($WeaponProbe -and $logs.host -notmatch 'CoopNet respawn probe: guest equipment retained; rounds 2') { throw 'Respawn equipment/ammunition preservation evidence missing.' }
     if ($logs.host -notmatch 'CoopNet respawn probe: host respawned at guest' -or

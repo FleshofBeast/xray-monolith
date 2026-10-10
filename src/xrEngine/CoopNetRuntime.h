@@ -1,4 +1,6 @@
 #pragma once
+#include <vector>
+#include <string>
 namespace engine_coopnet {
 // Plain-text bridge keeps the exception-enabled transport TU out of xrCore headers.
 void report(const char* text);
@@ -26,5 +28,11 @@ bool party_controls_enabled();
 bool player_downed();
 bool can_respawn();
 bool request_respawn();
+struct SpectatorPlayer { unsigned long long entity=0; unsigned generation=0; std::string name; bool alive=false; };
+std::vector<SpectatorPlayer> spectator_players();
+bool select_spectator(unsigned long long entity,unsigned generation);
+void clear_spectator();
+unsigned long long spectator_target();
+bool spectator_pose(float* position,float* rotation);
 void respawn_status(char* output,unsigned capacity);
 }

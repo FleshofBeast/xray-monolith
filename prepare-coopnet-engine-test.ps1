@@ -90,6 +90,7 @@ if ($Launch) {
     foreach ($role in @('host', 'guest')) {
         $root = Join-Path $testRoot $role
         $probeArguments=@('-silent_error_mode','-noprefetch','-coop_engine_fixture')
+        if ($RespawnProbe) { $probeArguments+='-coop_respawn_spectator_probe' }
         if ($FactionProbe -and $role -eq 'host') { $probeArguments+='-coop_faction_probe' }
         if ($MutantProbe -and $role -eq 'host') { $probeArguments+='-coop_mutant_probe' }
         if ($NameplateProbe) { $probeArguments+=('-coop_nameplate_'+$role+'_probe') }

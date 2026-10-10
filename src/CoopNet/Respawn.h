@@ -2,18 +2,19 @@
 #include "Gameplay.h"
 namespace coopnet {
 enum class RespawnStatus : std::uint8_t { Accepted, Alive, NoLivingPlayer, Busy, Denied };
-struct RespawnRequest { Identity actor=0; std::uint32_t generation=0,level=0,sequence=0; };
+struct RespawnRequest { Identity actor=0; std::uint32_t generation=0,level=0,sequence=0; Identity target=0; std::uint32_t target_generation=0; };
 struct RespawnResult { RespawnRequest request; RespawnStatus status=RespawnStatus::Denied; std::uint32_t tick=0; std::array<float,3> position{}; };
 inline bool valid_respawn_request(const RespawnRequest& request) {
-    return request.actor && request.generation && request.level;
+    return request.actor && request.generation && request.level && (!request.target == !request.target_generation) && request.target!=request.actor;
 }
 inline std::vector<std::uint8_t> encode_respawn_request(const RespawnRequest& request) {
     if (!valid_respawn_request(request)) throw std::invalid_argument("Invalid respawn request");
-    Writer writer; writer.integer(request.actor,8); writer.integer(request.generation,4); writer.integer(request.level,4); writer.integer(request.sequence,4); return writer.bytes;
+    Writer writer; writer.integer(request.actor,8); writer.integer(request.generation,4); writer.integer(request.level,4); writer.integer(request.sequence,4); writer.integer(request.target,8); writer.integer(request.target_generation,4); return writer.bytes;
 }
 inline bool decode_respawn_request(const std::vector<std::uint8_t>& bytes,RespawnRequest& output) {
-    Reader reader(bytes); RespawnRequest request; std::uint64_t generation,level,sequence;
-    if (!reader.integer(request.actor,8) || !reader.integer(generation,4) || !reader.integer(level,4) || !reader.integer(sequence,4) || reader.remaining()) return false;
+    Reader reader(bytes); RespawnRequest request; std::uint64_t generation,level,sequence,target_generation;
+    if (!reader.integer(request.actor,8) || !reader.integer(generation,4) || !reader.integer(level,4) || !reader.integer(sequence,4) || !reader.integer(request.target,8) || !reader.integer(target_generation,4) || reader.remaining()) return false;
+    request.target_generation=static_cast<std::uint32_t>(target_generation);
     request.generation=static_cast<std::uint32_t>(generation); request.level=static_cast<std::uint32_t>(level); request.sequence=static_cast<std::uint32_t>(sequence);
     if (!valid_respawn_request(request)) return false; output=request; return true;
 }
@@ -28,9 +29,9 @@ inline std::vector<std::uint8_t> encode_respawn_result(const RespawnResult& resu
     for (const auto value:result.position) write_float(writer,value); return writer.bytes;
 }
 inline bool decode_respawn_result(const std::vector<std::uint8_t>& bytes,RespawnResult& output) {
-    if (bytes.size()!=37) return false;
-    RespawnResult result; if (!decode_respawn_request({bytes.begin(),bytes.begin()+20},result.request)) return false;
-    const std::vector<std::uint8_t> tail(bytes.begin()+20,bytes.end()); Reader remainder(tail); std::uint64_t status,tick;
+    if (bytes.size()!=49) return false;
+    RespawnResult result; if (!decode_respawn_request({bytes.begin(),bytes.begin()+32},result.request)) return false;
+    const std::vector<std::uint8_t> tail(bytes.begin()+32,bytes.end()); Reader remainder(tail); std::uint64_t status,tick;
     if (!remainder.integer(status,1) || !remainder.integer(tick,4)) return false;
     result.status=static_cast<RespawnStatus>(status); result.tick=static_cast<std::uint32_t>(tick);
     for (auto& value:result.position) if (!read_float(remainder,value)) return false;

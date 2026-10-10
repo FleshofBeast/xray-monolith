@@ -40,7 +40,7 @@ For an internet connection, configure the **host's** router:
 
 TCP forwarding is not required for this direct UDP connection. Guests do not need a forwarding rule. This build does not provide automatic router traversal or a relay. If your router is behind another router, both must forward the port; if your ISP uses carrier-grade NAT, request a reachable public IPv4 address or use a VPN that provides connectivity between the players.
 
-Use `coop_disconnect` to leave or stop hosting, and `coop_respawn` to respawn at a living teammate when downed. The host controls the shared world settings and the party travels between locations together. See [CoopNet progress](docs/coop/PROGRESS.md) for tested features and remaining gameplay work.
+Use `coop_disconnect` to leave or stop hosting. When downed, click a living teammate's name to spectate them in third person. A/D cycles living teammates; Enter respawns at the currently spectated teammate's current position. Downed teammates are unavailable, and everyone being downed disables respawn. `coop_respawn` also works from the console. The host controls the shared world settings and the party travels between locations together. See [CoopNet progress](docs/coop/PROGRESS.md) for tested features and remaining gameplay work.
 
 Other players see your equipped native outfit/body model and the weapon you currently have drawn. Outfit and weapon changes, holstering, and native attachment-bone visibility update during the session. Reconnecting guests receive the current appearance. These updates use protocol 27; all players must install the matching build.
 

@@ -143,6 +143,8 @@ struct Session {
     bool clock_started = false;
     coopnet::EntityRegistry entities;
     coopnet::Identity host_actor = 0;
+    coopnet::Identity spectated_actor=0;
+    std::uint32_t spectated_generation=0;
     std::uint64_t host_incarnation = 0, server_us = 0;
     bool server_clock_known = false;
     std::uint32_t tick = 0;
@@ -526,7 +528,20 @@ coopnet::RespawnResult respawn_player(Session& current,coopnet::Identity player,
     if (!capture_actor_condition(pose.object,condition)) return result;
     if (condition.health>0) { result.status=coopnet::RespawnStatus::Alive; return result; }
     if (current.party_loading) { result.status=coopnet::RespawnStatus::Busy; return result; }
-    if (!living_player_position(current,pose.object,pose.level,result.position.data())) { result.status=coopnet::RespawnStatus::NoLivingPlayer; return result; }
+    if (request.target) {
+        LocalActorPose target; bool found=false;
+        const auto* binding=current.entities.find(request.target);
+        if (!binding || binding->generation!=request.target_generation) return result;
+        if (request.target==current.host_actor) found=capture_local_actor(target);
+        else for (const auto& participant:current.host.session().players()) if (participant.connected) {
+            const auto guest=current.guests.find(participant.id);
+            if (guest!=current.guests.end() && guest->second.entity==request.target && guest->second.generation==request.target_generation)
+                found=capture_guest_actor(guest->second.object,target);
+        }
+        ActorConditionState health;
+        if (!found || target.object==pose.object || target.level!=pose.level || !capture_actor_condition(target.object,health) || health.health<=0) return result;
+        for (unsigned axis=0;axis<3;++axis) result.position[axis]=target.position[axis];
+    } else if (!living_player_position(current,pose.object,pose.level,result.position.data())) { result.status=coopnet::RespawnStatus::NoLivingPlayer; return result; }
     if (!respawn_actor(pose.object,pose.level,result.position.data())) return result;
     result.status=coopnet::RespawnStatus::Accepted;
     for (const auto& participant:current.host.session().players()) if (participant.id==player && player!=current.host.session().players()[0].id) {
@@ -579,7 +594,11 @@ void exercise_respawn_probe(Session& current,double elapsed) {
         }
         if (!current.respawn_probe_phase && player_downed() && can_respawn()) {
             current.respawn_probe_wait+=elapsed;
-            if (current.respawn_probe_wait>=3 && request_respawn()) {
+            if (current.respawn_probe_wait>=3) {
+                const auto players=spectator_players(); bool selected=false;
+                for (const auto& player:players) if (player.alive) { selected=select_spectator(player.entity,player.generation); break; }
+                float position[3],rotation[3];
+                if (!selected || !spectator_pose(position,rotation) || !request_respawn()) throw std::runtime_error("Guest spectator selection or targeted respawn failed");
                 current.respawn_probe_phase=1; Msg("* CoopNet respawn probe: guest requested revival");
             }
         } else if (current.respawn_probe_phase==1 && !player_downed()) {
@@ -606,10 +625,15 @@ void exercise_respawn_probe(Session& current,double elapsed) {
         current.respawn_probe_phase=2; current.respawn_probe_wait=0;
         Msg("* CoopNet respawn probe: host death with living guest");
     } else if (current.respawn_probe_phase==2 && current.respawn_probe_wait>=3) {
+        const auto players=spectator_players(); bool selected=false;
+        for (const auto& player:players) if (player.alive) { selected=select_spectator(player.entity,player.generation); break; }
+        float position[3],rotation[3];
+        if (!selected || !spectator_pose(position,rotation)) throw std::runtime_error("Host spectator selection failed");
         if (!request_respawn()) throw std::runtime_error("Host respawn at guest failed");
         current.respawn_probe_phase=3; current.respawn_probe_wait=0;
         Msg("* CoopNet respawn probe: host respawned at guest");
     } else if (current.respawn_probe_phase==3 && current.respawn_probe_wait>=5) {
+        clear_spectator();
         if (!down_actor(host.object) || !down_actor(guest.object) || can_respawn() || request_respawn()) throw std::runtime_error("No-living-player respawn guard failed");
         const auto* binding=current.entities.find(current.host_actor);
         const coopnet::RespawnRequest request{current.host_actor,binding->generation,host.level,++current.respawn_sequence};
@@ -1731,6 +1755,51 @@ bool world_setting_command(const char* name) {
         !strncmp(name,"env_",4) || !strcmp(name,"g_god") || !strcmp(name,"g_unlimitedammo") || !strcmp(name,"g_no_clip"));
 }
 bool player_downed() { return shared_world_active() && local_actor_downed(); }
+std::vector<SpectatorPlayer> spectator_players() {
+    std::vector<SpectatorPlayer> result; LocalActorPose local;
+    if (!session || !shared_world_active() || !capture_local_actor(local)) return result;
+    if (session->mode==coopnet::Mode::Host) {
+        for (const auto& player:session->host.session().players()) if (player.connected) {
+            const auto guest=session->guests.find(player.id); LocalActorPose pose; ActorConditionState health;
+            if (guest==session->guests.end() || !guest->second.generation || !capture_guest_actor(guest->second.object,pose) || pose.level!=local.level || !capture_actor_condition(pose.object,health)) continue;
+            result.push_back({guest->second.entity,guest->second.generation,session->host.player_name(player.id),health.health>0});
+        }
+    } else if (session->client.session().state()==coopnet::ClientState::Connected) {
+        session->client.actors().visit([&](const coopnet::ActorPresence& actor) {
+            if (actor.player==session->client.session().welcome().player || actor.level!=local.level || !session->presented.count(actor.entity)) return;
+            const auto health=session->player_vitals.find(actor.entity);
+            if (health==session->player_vitals.end() || health->second.generation!=actor.generation || health->second.level!=local.level) return;
+            result.push_back({actor.entity,actor.generation,session->client.player_name(actor.player),health->second.health>0});
+        });
+    }
+    return result;
+}
+bool select_spectator(unsigned long long entity,unsigned generation) {
+    if (!player_downed()) return false;
+    for (const auto& player:spectator_players()) if (player.entity==entity && player.generation==generation && player.alive) {
+        session->spectated_actor=entity; session->spectated_generation=generation;
+        Msg("* CoopNet spectator selected: entity %llu generation %u",entity,generation); return true;
+    }
+    return false;
+}
+void clear_spectator() { if (session) { session->spectated_actor=0; session->spectated_generation=0; } }
+unsigned long long spectator_target() { return session ? session->spectated_actor : 0; }
+bool spectator_pose(float* position,float* rotation) {
+    if (!position || !rotation || !player_downed() || !session->spectated_actor) return false;
+    bool valid=false;
+    for (const auto& player:spectator_players()) if (player.entity==session->spectated_actor && player.generation==session->spectated_generation && player.alive) valid=true;
+    if (!valid) { clear_spectator(); return false; }
+    if (session->mode==coopnet::Mode::Host) {
+        for (const auto& guest:session->guests) if (guest.second.entity==session->spectated_actor) {
+            LocalActorPose pose; if (!capture_guest_actor(guest.second.object,pose)) return false;
+            for (unsigned axis=0;axis<3;++axis) { position[axis]=pose.position[axis]; rotation[axis]=pose.rotation[axis]; } return true;
+        }
+    } else {
+        coopnet::ActorSnapshot pose; if (!session->client.actors().sample(session->spectated_actor,session->server_us,pose)) return false;
+        for (unsigned axis=0;axis<3;++axis) { position[axis]=pose.position[axis]; rotation[axis]=pose.rotation[axis]; } return true;
+    }
+    return false;
+}
 bool can_respawn() {
     LocalActorPose local;
     if (!player_downed() || !capture_local_actor(local)) return false;
@@ -1750,6 +1819,10 @@ bool request_respawn() {
         if (!can_respawn()) return false;
         LocalActorPose local; if (!capture_local_actor(local)) return false;
         coopnet::RespawnRequest request; request.level=local.level; request.sequence=++session->respawn_sequence;
+        if (session->spectated_actor) {
+            float position[3],rotation[3]; if (!spectator_pose(position,rotation)) return false;
+            request.target=session->spectated_actor; request.target_generation=session->spectated_generation;
+        }
         if (session->mode==coopnet::Mode::Host) {
             const auto* binding=session->entities.find(session->host_actor); if (!binding) return false;
             request.actor=session->host_actor; request.generation=binding->generation;
@@ -1858,6 +1931,11 @@ bool shared_world_active() { return false; }
 bool party_level_change_allowed() { return true; }
 bool party_controls_enabled() { return true; }
 bool player_downed() { return false; }
+std::vector<SpectatorPlayer> spectator_players() { return {}; }
+bool select_spectator(unsigned long long,unsigned) { return false; }
+void clear_spectator() {}
+unsigned long long spectator_target() { return 0; }
+bool spectator_pose(float*,float*) { return false; }
 bool can_respawn() { return false; }
 bool request_respawn() { return false; }
 void respawn_status(char* output,unsigned capacity) { if (output && capacity) output[0]=0; }

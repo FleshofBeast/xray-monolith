@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "Actor.h"
 #include "../xrEngine/CameraBase.h"
+#include "../xrEngine/CoopNetRuntime.h"
 #ifdef DEBUG
 #include "PHDebug.h"
 #endif
@@ -478,6 +479,27 @@ float firstPersonDeathHeadScale = 3.f;
 
 void CActor::cam_Update(float dt, float fFOV)
 {
+    static unsigned long long last_spectated=0;
+    float position[3],rotation[3];
+    if (this==Level().CurrentEntity() && engine_coopnet::spectator_pose(position,rotation)) {
+        Fvector anchor; anchor.set(position[0],position[1]+1.5f,position[2]);
+        Fvector backward; backward.setHP(-rotation[1]+PI,-.18f);
+        collide::rq_result hit;
+        const bool blocked=Level().ObjectSpace.RayPick(anchor,backward,3.5f,collide::rqtStatic,hit,this);
+        const float distance=blocked ? _max(.15f,hit.range-.2f) : 3.5f;
+        CCameraBase spectator(this,CCameraBase::flPositionRigid|CCameraBase::flDirectionRigid);
+        spectator.style=csLookAt; spectator.f_fov=fFOV; spectator.f_aspect=cam_Active()->f_aspect;
+        spectator.vPosition.mad(anchor,backward,distance);
+        spectator.vDirection.sub(anchor,spectator.vPosition).normalize_safe();
+        Fvector right; Fvector::generate_orthonormal_basis_normalized(spectator.vDirection,spectator.vNormal,right);
+        Level().Cameras().UpdateFromCamera(&spectator); Level().Cameras().ApplyDevice(VIEWPORT_NEAR);
+        if (last_spectated!=engine_coopnet::spectator_target()) {
+            last_spectated=engine_coopnet::spectator_target();
+            Msg("* CoopNet third-person spectator camera applied: entity %llu",last_spectated);
+        }
+        return;
+    }
+    last_spectated=0;
 	if (m_holder) return;
 
 	// HUD FOV Update

@@ -5,9 +5,13 @@
 using namespace coopnet;
 void require(bool value) { if (!value) std::abort(); }
 int main() {
-    RespawnRequest request{20,1,10,1},decoded;
+    RespawnRequest request{20,1,10,1,10,1},decoded;
     const auto request_bytes=encode_respawn_request(request);
     require(decode_respawn_request(request_bytes,decoded));
+    require(decoded.target==10 && decoded.target_generation==1);
+    require(!valid_respawn_request({20,1,10,1,20,1}));
+    require(!valid_respawn_request({20,1,10,1,10,0}));
+    require(!valid_respawn_request({20,1,10,1,0,1}));
     for (std::size_t size=0;size<request_bytes.size();++size) require(!decode_respawn_request({request_bytes.begin(),request_bytes.begin()+size},decoded));
     RespawnResult result{request,RespawnStatus::Accepted,20,{3,4,5}},restored;
     const auto bytes=encode_respawn_result(result); require(decode_respawn_result(bytes,restored));
@@ -23,7 +27,7 @@ int main() {
     require(host.create_actor({10,1,1,1,10,"actor"}) && host.create_actor({20,player,2,1,10,"actor"})); host.update(.01); client.update(.01);
     unsigned mutations=0,approvals=0,vitals=0;
     host.set_respawn_handler([&](Identity owner,const RespawnRequest& value) {
-        require(owner==player); ++mutations; return RespawnResult{value,RespawnStatus::Accepted,20,{3,4,5}};
+        require(owner==player && value.target==10 && value.target_generation==1); ++mutations; return RespawnResult{value,RespawnStatus::Accepted,20,{3,4,5}};
     });
     client.set_respawn_sink([&](const RespawnResult& value) { require(value.status==RespawnStatus::Accepted && value.position[2]==5); ++approvals; });
     client.set_vitals_sink([&](const ActorVitals&) { ++vitals; });
