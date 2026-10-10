@@ -3,6 +3,7 @@
 #include "Transport.h"
 #include "ActorSnapshot.h"
 #include "ActorPresence.h"
+#include "ActorAppearance.h"
 #include "LevelAssignment.h"
 #include "ActorInput.h"
 #include "Gameplay.h"
@@ -44,6 +45,7 @@ class ClientPump {
     std::array<std::uint32_t,shared_kind_count> shared_revision_{};
     std::function<void(SharedKind,std::uint32_t,const std::vector<std::uint8_t>&)> shared_sink_;
     ActorReplicas actors_;
+    std::map<Identity,ActorAppearance> appearances_;
     std::map<Identity,std::string> names_;
     LevelAssignment assignment_;
     SequenceWindow assignments_;
@@ -91,7 +93,7 @@ class ClientPump {
         rules_assembly_.clear(); rules_revision_=0; clock_sequences_={};
         party_status_={}; party_sequences_={};
         if (!transport) throw std::invalid_argument("Missing client transport");
-        transport_ = std::move(transport); roster_.reset(); actors_ = {}; assignment_ = {}; assignments_ = {};
+        transport_ = std::move(transport); roster_.reset(); actors_ = {}; appearances_.clear(); assignment_ = {}; assignments_ = {};
         level_ready_sent_ = false; transfer_failure_ = TransferFailure::None; sent_ = false; ready_sent_ = false; handshake_time_ = 0;
         items_.clear(); vitals_sequences_.clear(); pending_inventory_.clear();
         inventory_history_.clear(); inventory_sequences_={};
@@ -105,7 +107,7 @@ class ClientPump {
             if (transfer_failure_sink_) transfer_failure_sink_({session_.welcome().player,assignment_,transfer_failure_});
         }
         if (transport_) transport_->close();
-        transport_.reset(); roster_.reset(); actors_ = {}; assignment_ = {}; session_.lost_connection();
+        transport_.reset(); roster_.reset(); actors_ = {}; appearances_.clear(); assignment_ = {}; session_.lost_connection();
         items_.clear(); vitals_sequences_.clear(); pending_inventory_.clear();
         clear_baseline();
     }
@@ -226,6 +228,9 @@ public:
     const ClientSession& session() const { return session_; }
     const ClientRoster* roster() const { return roster_.get(); }
     const ActorReplicas& actors() const { return actors_; }
+    const ActorAppearance* appearance(Identity entity) const {
+        const auto found=appearances_.find(entity);return found==appearances_.end()?nullptr:&found->second;
+    }
     const LevelAssignment& assignment() const { return assignment_; }
     TransferFailure transfer_failure() const { return transfer_failure_; }
     void set_transfer_failure_sink(std::function<void(const LevelFailure&)> sink) { transfer_failure_sink_ = std::move(sink); }
@@ -390,6 +395,12 @@ public:
                 const auto floor=respawn_ticks_.find(snapshot.entity);
                 if (floor!=respawn_ticks_.end() && (snapshot.tick-floor->second==0 || snapshot.tick-floor->second>=0x80000000u)) continue;
                 if (actors_.push(snapshot) && snapshot_sink_) snapshot_sink_(snapshot);
+            } else if (frame.message == Message::ActorAppearance) {
+                ActorAppearance a;
+                if(!decode_appearance(frame.payload,a)){lost();return;}
+                const auto* actor=actors_.find(a.entity);
+                if(!actor || actor->generation!=a.generation || actor->level!=a.level){lost();return;}
+                appearances_[a.entity]=std::move(a);
             } else if (frame.message == Message::ActorCreate || frame.message == Message::ActorRemove) {
                 ActorPresence presence;
                 if (!decode_presence(frame.payload, presence)) { lost(); return; }
@@ -398,6 +409,7 @@ public:
                     if (entry.player == presence.player && entry.character == presence.character) participant = true;
                 if (!participant || !(frame.message == Message::ActorCreate ?
                     actors_.create(presence) : actors_.remove(presence))) { lost(); return; }
+                appearances_.erase(presence.entity);
                 if (frame.message==Message::ActorRemove || frame.message==Message::ActorCreate) {
                     if (frame.message==Message::ActorRemove) vitals_sequences_.erase(presence.entity);
                     for (auto pending=pending_inventory_.begin();pending!=pending_inventory_.end();) {
@@ -498,7 +510,7 @@ public:
         names_.clear();
         character_frames_.clear(); character_cursor_=0;
         if (transport_) transport_->close();
-        transport_.reset(); roster_.reset(); actors_ = {}; assignment_ = {}; transfer_failure_ = TransferFailure::None; session_.stop();
+        transport_.reset(); roster_.reset(); actors_ = {}; appearances_.clear(); assignment_ = {}; transfer_failure_ = TransferFailure::None; session_.stop();
         items_.clear(); vitals_sequences_.clear(); pending_inventory_.clear();
         inventory_history_.clear(); inventory_sequences_={};
         dialogue_history_.clear(); dialogue_sequences_={};

@@ -153,6 +153,7 @@ struct Session {
     double name_wait=0;
     coopnet::TickClock ticks;
     std::string host_visual;
+    double appearance_wait=0;
     std::set<coopnet::Identity> presented;
     bool replica_probe = false;
     bool movement_probe = false;
@@ -589,7 +590,7 @@ void capture_host(Session& current, double elapsed) {
     auto* previous = current.host_actor ? current.entities.find(current.host_actor) : nullptr;
     const bool changed = available && previous && previous->active &&
         (pose.incarnation != current.host_incarnation || previous->engine.level != pose.level ||
-            previous->engine.object != pose.object || current.host_visual != pose.visual);
+            previous->engine.object != pose.object);
     if (previous && previous->active && (!available || changed)) {
         current.host.remove_actor(previous->entity, previous->generation);
         current.entities.unbind(previous->entity, previous->generation);
@@ -641,6 +642,7 @@ void present_client(Session& current, double elapsed) {
         coopnet::ActorSnapshot sample;
         if (!current.client.actors().sample(actor.entity,current.server_us,sample)) return;
         RemoteActorPose pose;
+        if(const auto* appearance=current.client.appearance(actor.entity)) pose.appearance=*appearance;
         pose.entity = actor.entity; pose.generation = actor.generation; pose.level = actor.level;
         pose.movement = sample.movement;
         std::memcpy(pose.visual,actor.visual.c_str(),actor.visual.size() + 1);
@@ -998,7 +1000,7 @@ void send_client_controls(Session& current, double elapsed) {
     if (current.automated_controls) {
         // Explicit automated test stimulus through the real client input channel.
         static constexpr std::uint16_t directions[] = {1,2,4,8};
-        input.buttons = directions[(current.input_sequence % 200) / 50];
+        input.buttons = strstr(GetCommandLineA(),"-coop_appearance_probe") ? 0 : directions[(current.input_sequence % 200) / 50];
         input.yaw = 0; input.pitch = 0;
     }
     if (current.gameplay_probe && current.gameplay_phase<3) input.buttons=0;
@@ -1317,7 +1319,24 @@ void update(double) {
                 }
             }
         }
-        if(session) { update_player_nameplates(*session,elapsed); update_join_news(*session); }
+        if(session) {
+            if(session->mode==coopnet::Mode::Host && (session->appearance_wait+=elapsed)>=.1) {
+                const auto appearance_elapsed=session->appearance_wait;session->appearance_wait=0;
+                auto publish=[&](coopnet::Identity entity,std::uint32_t generation,std::uint16_t object,std::uint32_t level) {
+                    exercise_appearance_probe(object,appearance_elapsed);
+                    coopnet::ActorAppearance a;if(!capture_actor_appearance(object,a))return;
+                    a.entity=entity;a.generation=generation;a.level=level;
+                    if(!session->host.publish_appearance(a))throw std::runtime_error("Native actor appearance publication failed");
+                };
+                if(const auto* actor=session->entities.find(session->host_actor)) if(actor->active)
+                    publish(actor->entity,actor->generation,actor->engine.object,actor->engine.level);
+                for(const auto& entry:session->guests) if(entry.second.generation) {
+                    const auto* actor=session->entities.find(entry.second.entity);if(actor && actor->active)
+                        publish(actor->entity,actor->generation,entry.second.object,actor->engine.level);
+                }
+            }
+            update_player_nameplates(*session,elapsed); update_join_news(*session);
+        }
     } catch (const std::exception& error) {
         Msg("! CoopNet update failed: %s", error.what()); stop();
     }

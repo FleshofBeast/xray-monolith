@@ -58,6 +58,7 @@
 #include "script_engine.h"
 #include "lua.hpp"
 #include "game_news.h"
+#include "../xrEngine/bone.h"
 #include "alife_time_manager.h"
 #include "game_cl_single.h"
 #include "GametaskManager.h"
@@ -2495,6 +2496,81 @@ bool correct_local_actor_native(std::uint32_t level,const float* position,const 
     if(!capture_local_actor(local) || local.level!=level || !world_level_is_replica()) return false;
     Fvector target,speed; target.set(position[0],position[1],position[2]); speed.set(velocity[0],velocity[1],velocity[2]);
     return g_actor->coopnet_import_movement(target,speed,delay_ms);
+}
+void exercise_appearance_probe(std::uint16_t object,double elapsed) {
+    if(!strstr(GetCommandLineA(),"-coop_appearance_probe") || world_level_is_replica())return;
+    auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(object));if(!actor || !actor->g_Alive())return;
+    const auto guest=guests.find(object);
+    static std::set<u16> reported;
+    if(guest!=guests.end() && reported.insert(object).second)
+        Msg("* CoopNet appearance probe guest setup: object %u importing %u restoring %u starter %u inventory %u expected %u",object,guest->second.importing,guest->second.restoring,guest->second.starter_pending,static_cast<unsigned>(actor->inventory().m_all.size()),static_cast<unsigned>(guest->second.imported_items.size()));
+    if(guest!=guests.end() && (guest->second.importing || guest->second.restoring || guest->second.starter_pending))return;
+    struct Probe { std::array<u16,4> items{{0xffff,0xffff,0xffff,0xffff}};unsigned stage=0;double time=0; };
+    static std::map<u16,Probe> probes;auto& p=probes[object];p.time+=elapsed;
+    if(!p.stage) {
+        if(p.time<5)return;
+        if(actor!=g_actor) {
+            Fmatrix transform=actor->XFORM();transform.c.mad(g_actor->Position(),g_actor->XFORM().k,4.f);
+            actor->ForceTransform(transform);actor->character_physics_support()->movement()->SetVelocity(Fvector().set(0,0,0));
+        }
+        const char* sections[]={"wpn_pm","wpn_ak74","novice_outfit","stalker_outfit"};
+        for(unsigned n=0;n<4;++n) {
+            if(!pSettings->section_exist(sections[n]))throw std::runtime_error("Appearance probe stock item missing");
+            auto* item=Level().spawn_item(sections[n],actor->Position(),actor->ai_location().level_vertex_id(),object,true);
+            if(!item)throw std::runtime_error("Appearance probe spawn failed");item->m_bALifeControl=false;
+            NET_Packet packet;item->Spawn_Write(packet,TRUE);u16 type;packet.r_begin(type);
+            auto* created=Level().Server->Process_spawn(packet,Level().Server->GetServerClient()->ID,FALSE,nullptr,true);
+            F_entity_Destroy(item);if(!created)throw std::runtime_error("Appearance probe native spawn failed");p.items[n]=created->ID;
+            if(actor!=g_actor)session_items.emplace(created->ID,SessionItem{++item_incarnation,false,true});
+        }
+        p.stage=1;p.time=0;return;
+    }
+    if(p.stage==3 || (p.stage==2 && p.time<(actor==g_actor?60:25)))return;
+    const unsigned set=p.stage-1;
+    auto* w=smart_cast<CWeapon*>(Level().Objects.net_Find(p.items[set]));
+    auto* outfit=smart_cast<CInventoryItem*>(Level().Objects.net_Find(p.items[set+2]));
+    if(!w || !outfit || w->H_Parent()!=actor || outfit->object().H_Parent()!=actor) {
+        if(p.time>10 && reported.insert(p.items[set]).second)
+            Msg("* CoopNet appearance probe waiting: actor %u weapon %u exists %u parent %u outfit %u exists %u parent %u inventory %u",object,p.items[set],w!=nullptr,w&&w->H_Parent()?w->H_Parent()->ID():0xffff,p.items[set+2],outfit!=nullptr,outfit&&outfit->object().H_Parent()?outfit->object().H_Parent()->ID():0xffff,static_cast<unsigned>(actor->inventory().m_all.size()));
+        return;
+    }
+    for(const auto slot:{w->BaseSlot(),outfit->BaseSlot()}) {
+        auto* existing=actor->inventory().ItemFromSlot(slot);
+        if(existing && existing!=w && existing!=outfit)actor->inventory().Ruck(existing,false);
+    }
+    if(actor->inventory().ItemFromSlot(outfit->BaseSlot())!=outfit && !actor->inventory().Slot(outfit->BaseSlot(),outfit,true))return;
+    if(actor->inventory().ItemFromSlot(w->BaseSlot())!=w && !actor->inventory().Slot(w->BaseSlot(),w,true))return;
+    actor->inventory().Activate(w->BaseSlot(),true);
+    Msg("* CoopNet appearance probe equipped: object %u weapon %s outfit %s body %s",object,w->cNameSect().c_str(),outfit->object().cNameSect().c_str(),actor->cNameVisual().c_str());
+    ++p.stage;p.time=0;
+}
+bool capture_actor_appearance(std::uint16_t object,coopnet::ActorAppearance& out) {
+    if(!g_pGameLevel || !g_pGameLevel->bReady) return false;
+    auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(object));
+    if(!actor || !actor->Visual()) return false;
+    coopnet::ActorAppearance a; a.body=actor->cNameVisual().c_str();
+    auto hidden=[](IRenderVisual* visual,std::vector<std::string>& names) {
+        auto* k=visual?visual->dcast_PKinematics():nullptr;if(!k)return true;
+        for(u16 n=0;n<k->LL_BoneCount();++n) if(!k->LL_GetBoneVisible(n)) names.emplace_back(k->LL_GetData(n).name.c_str());
+        return names.size()<=64;
+    };
+    if(!hidden(actor->Visual(),a.hidden_body))return false;
+    auto* weapon=smart_cast<CWeapon*>(actor->inventory().ActiveItem());
+    if(weapon && weapon->Visual() && weapon->GetState()!=CHUDState::eHidden && weapon->GetState()!=CHUDState::eHiding) {
+        auto* k=actor->Visual()->dcast_PKinematics();int left=-1,right=-1,one=-1;actor->g_WeaponBones(left,right,one);
+        if(!k || left<0 || right<0 || one<0 || left>=k->LL_BoneCount() || right>=k->LL_BoneCount() || one>=k->LL_BoneCount())return false;
+        a.weapon=weapon->cNameVisual().c_str();a.animation=static_cast<std::uint8_t>(weapon->animation_slot());
+        a.one_hand=weapon->HandDependence()==hd1Hand || weapon->GetState()==CWeapon::eReload || !actor->g_Alive();
+        a.left_bone=k->LL_GetData(static_cast<u16>(left)).name.c_str();a.right_bone=k->LL_GetData(static_cast<u16>(right)).name.c_str();
+        a.one_hand_bone=k->LL_GetData(static_cast<u16>(one)).name.c_str();
+        const auto offset=weapon->get_mOffset();float h,p,b;offset.getHPB(h,p,b);
+        a.offset={offset.c.x,offset.c.y,offset.c.z,h,p,b};
+        if(!hidden(weapon->Visual(),a.hidden_weapon))return false;
+    }
+    // The runtime supplies network identity/generation after capture.
+    a.entity=1;a.generation=1;a.level=1;if(!coopnet::valid_appearance(a))return false;
+    a.entity=0;a.generation=0;a.level=0;
+    out=std::move(a);return true;
 }
 bool character_selection_ready() {
     LocalActorPose local;

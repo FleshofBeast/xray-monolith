@@ -3,6 +3,7 @@
 #include "Transport.h"
 #include "ActorSnapshot.h"
 #include "ActorPresence.h"
+#include "ActorAppearance.h"
 #include "LevelAssignment.h"
 #include "ActorInput.h"
 #include "Gameplay.h"
@@ -75,6 +76,7 @@ class HostPump {
     std::function<Identity()> tokens_;
     std::list<Peer> peers_;
     std::map<Identity, ActorPresence> actors_;
+    std::map<Identity, ActorAppearance> appearances_;
     std::map<Identity,std::string> names_;
     std::map<Identity, std::uint32_t> actor_generations_;
     std::deque<LevelFailure> failures_;
@@ -97,7 +99,11 @@ class HostPump {
     }
     bool presence(Peer& peer, Message message, const ActorPresence& actor) {
         if (queue(peer, Frame{message, Channel::World, Delivery::ReliableOrdered, actor.generation,
-            encode_presence(actor)})) return true;
+            encode_presence(actor)})) {
+            const auto a=appearances_.find(actor.entity);
+            if (message!=Message::ActorCreate || a==appearances_.end() ||
+                queue(peer,{Message::ActorAppearance,Channel::World,Delivery::ReliableOrdered,actor.generation,encode_appearance(a->second)})) return true;
+        }
         peer.transport->close(); return false;
     }
     bool queue(Peer& peer, Frame frame) {
@@ -520,6 +526,17 @@ public:
         }
         return true;
     }
+    bool publish_appearance(const ActorAppearance& a) {
+        const auto actor=actors_.find(a.entity);
+        if (session_.mode()!=Mode::Host || !valid_appearance(a) || actor==actors_.end() ||
+            actor->second.generation!=a.generation || actor->second.level!=a.level) return false;
+        const auto bytes=encode_appearance(a);const auto old=appearances_.find(a.entity);
+        if(old!=appearances_.end() && encode_appearance(old->second)==bytes) return true;
+        appearances_[a.entity]=a;
+        for(auto& peer:peers_) if(peer.ready && peer.level==a.level &&
+            !queue(peer,{Message::ActorAppearance,Channel::World,Delivery::ReliableOrdered,a.generation,bytes})) peer.transport->close();
+        return true;
+    }
     bool create_actor(const ActorPresence& actor) {
         if (session_.mode() != Mode::Host || !valid_presence(actor) || actors_.count(actor.entity) || actors_.size() >= 4)
             return false;
@@ -544,7 +561,7 @@ public:
         for (auto& peer : peers_) if (peer.player==found->second.player) {
             peer.dialogue_outgoing.clear(); peer.dialogues.clear(); peer.dialogue_view={}; peer.has_dialogue_view=false;
         }
-        actors_.erase(found); return true;
+        appearances_.erase(entity); actors_.erase(found); return true;
     }
     void start(Identity id, Identity character, BuildIdentity build, std::function<Identity()> tokens) {
         if (!tokens) throw std::invalid_argument("Missing reconnect token source");
@@ -651,6 +668,7 @@ public:
             if (peer.transport->connected() && !flush(peer)) peer.transport->close();
     }
     void stop() {
+        appearances_.clear();
         names_.clear();
         for (auto& peer : peers_) peer.transport->close();
         peers_.clear(); actors_.clear(); actor_generations_.clear(); failures_.clear(); session_.stop(); tokens_ = {}; id_ = 0;

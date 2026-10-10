@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include "InventoryView.h"
+#include "ActorAppearance.h"
 namespace engine_coopnet {
 // Copied owner-thread state only. No engine pointer crosses the transport boundary.
 struct LocalActorPose {
@@ -14,6 +15,7 @@ struct LocalActorPose {
     char visual[192]{};
 };
 struct RemoteActorPose {
+    coopnet::ActorAppearance appearance;
     std::uint64_t entity = 0;
     std::uint32_t generation = 0, level = 0;
     float position[3]{}, rotation[3]{};
@@ -34,6 +36,8 @@ struct PlayerNameplate {
     std::string name;
 };
 bool capture_player_name(std::string& name);
+bool capture_actor_appearance(std::uint16_t object,coopnet::ActorAppearance& appearance);
+void exercise_appearance_probe(std::uint16_t object,double elapsed);
 bool character_selection_ready();
 bool place_local_actor(std::uint32_t level,const float* position,const float* velocity);
 bool show_session_join_news(const std::string& name);
