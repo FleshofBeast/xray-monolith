@@ -11,6 +11,7 @@
 #include "WorldBaseline.h"
 #include "WorldState.h"
 #include "SharedWorld.h"
+#include "Radio.h"
 #include "PartyTransition.h"
 #include "WorldSettings.h"
 #include "Respawn.h"
@@ -370,7 +371,8 @@ public:
                         }
                         world_sequences_=std::move(bindings);
                     } else if (chunk.kind==SharedKind::Quests) { QuestState quests; if (!decode_quests(assembly.bytes(),quests)) { lost(); return; } }
-                    else { std::vector<ContainerRecord> containers; if (!decode_containers(assembly.bytes(),containers)) { lost(); return; } }
+                    else if(chunk.kind==SharedKind::Containers) { std::vector<ContainerRecord> containers; if (!decode_containers(assembly.bytes(),containers)) { lost(); return; } }
+                    else {std::vector<RadioRecord> news;if(!decode_radio(assembly.bytes(),news)) {lost();return;}}
                     shared_revision_[kind]=chunk.revision; if (shared_sink_) shared_sink_(chunk.kind,chunk.level,assembly.bytes()); assembly.clear();
                 }
             } else if (frame.message==Message::WorldState) {

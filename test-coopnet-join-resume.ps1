@@ -1,4 +1,4 @@
-param([ValidateRange(60,180)][int]$Seconds=110,[ValidateRange(60,180)][int]$ResumeSeconds=90,[switch]$AppearanceProbe,[switch]$MenuLeaveProbe,[switch]$VersionMismatchProbe)
+param([ValidateRange(60,180)][int]$Seconds=110,[ValidateRange(60,180)][int]$ResumeSeconds=90,[switch]$AppearanceProbe,[switch]$MenuLeaveProbe,[switch]$VersionMismatchProbe,[switch]$GuestFeaturesProbe)
 $ErrorActionPreference='Stop'
 $probeRoot=Join-Path $PSScriptRoot ('_build\coopnet-join-'+[Guid]::NewGuid().ToString('N'))
 foreach ($role in @('host','guest')) {
@@ -15,6 +15,7 @@ $options=Join-Path $client 'gamedata/configs/axr_options.ltx';$hashes[$options]=
 foreach($role in @('host','guest')) {
     $root=Join-Path $probeRoot $role
     Copy-Item "$client/gamedata" $root -Recurse
+    Copy-Item "$PSScriptRoot/gamedata/scripts/*.script" "$root/gamedata/scripts" -Force
     New-Item "$root/db" -ItemType Junction -Target "$client/db" | Out-Null
     $fs=Get-Content "$root/fsgame.ltx" | Where-Object {$_ -notmatch '^\$fs_root\$'}
     @('$fs_root$ = false | false | '+$root+'\')+@($fs) | Set-Content "$root/fsgame.ltx" -Encoding ascii
@@ -26,6 +27,7 @@ $owned=@()
 function Start-OwnedProbe([string]$Role) {
     $root=Join-Path $probeRoot $Role
     $arguments=@('-silent_error_mode','-noprefetch')
+    if($GuestFeaturesProbe){$arguments+='-coop_guest_features_probe'}
     if($AppearanceProbe){$arguments+='-coop_appearance_probe'}
     if($MenuLeaveProbe -and $Role -eq 'guest'){$arguments+='-coop_menu_leave_probe'}
     if($VersionMismatchProbe -and $Role -eq 'guest'){$arguments+='-coop_version_mismatch_probe'}
@@ -53,7 +55,7 @@ try {
         Close-OwnedProbe $hostProcess
         $guestLog=Get-Content (Join-Path $probeRoot 'guest/appdata/logs/xray_deadparrot.log') -Raw
         $hostLog=Get-Content (Join-Path $probeRoot 'host/appdata/logs/xray_deadparrot.log') -Raw
-        if($guestLog -notmatch 'version mismatch popup displayed: Host is using CoopNet 26.*mods 1.*Your version is CoopNet 26.*mods 3' -or
+        if($guestLog -notmatch 'version mismatch popup displayed: Host is using CoopNet 27.*mods 1.*Your version is CoopNet 27.*mods 3' -or
             $hostLog -notmatch 'radio version mismatch: ".+" attempted to join but a version mismatch was detected' -or
             ($guestLog+$hostLog) -match 'FATAL ERROR|\[SCRIPT ERROR\]|CoopNet update failed' -or
             $hostLog -match 'native guest bound:') {throw "Native version rejection notice failed: $probeRoot"}
@@ -64,6 +66,11 @@ try {
     if (!(Test-Path -LiteralPath $credentials) -or (Get-Item -LiteralPath $credentials).Length -eq 0) { throw 'Saved encrypted credentials missing.' }
     $firstLog=Get-Content (Join-Path $probeRoot 'guest\appdata\logs\xray_deadparrot.log') -Raw
     if ($firstLog -notmatch 'CoopNet connection credentials saved: generation 1' -or $firstLog -notmatch 'guest arrival placed:' -or $firstLog -match 'FATAL ERROR|\[SCRIPT ERROR\]|CoopNet update failed|CoopNet options .* failed') { throw 'First admission or arrival failed.' }
+    if($GuestFeaturesProbe) {
+        $firstCharacterHash=(Get-FileHash (Join-Path $probeRoot 'guest/appdata/savedgames/Stalker.coopchar')).Hash
+        if($firstLog -notmatch 'guest features probe: HUD quest completed reputation 395 rank 1294 goodwill 859 rubles 1500 items 16' -or
+            $firstLog -notmatch 'character exit save verified: .*Stalker.coopchar.*rubles 1500 reputation 395') {throw "Guest HUD, radio, quest/reward, progress or character exit save evidence missing: $probeRoot"}
+    }
     Set-Content (Join-Path $probeRoot 'guest-first.log') $firstLog
     Write-Output 'NATIVE_JOIN_CREDENTIALS_PASS: successful join wrote a Windows-encrypted connection profile.'
     if($MenuLeaveProbe) {
@@ -94,6 +101,32 @@ try {
         $guestLog -notmatch 'CoopNet host world rules applied:' -or
         ([regex]::Matches($hostLog,'CoopNet native guest bound: object \d+ generation \d+').Count -lt 2) -or
         ($guestLog+$hostLog) -match 'FATAL ERROR|\[SCRIPT ERROR\]|CoopNet update failed:|CoopNet options .* failed') { throw 'New-process menu-backend resume, arrival or host settings evidence missing.' }
+    if($GuestFeaturesProbe) {
+        $saves=Join-Path $probeRoot 'guest/appdata/savedgames'
+        $files=@(Get-ChildItem $saves -Filter '*.coopchar' -File)
+        $backups=@(Get-ChildItem (Join-Path $saves 'coopnet-backups') -Filter '*.bak' -File)
+        if($files.Count -ne 1 -or $backups.Count -lt 1 -or $hostLog -notmatch 'host guest features probe: shared money item reputation rank verified' -or
+            $guestLog -notmatch 'saved character loaded: Stalker items 16 rubles 1500 reputation 395' -or
+            $guestLog -notmatch 'guest features probe: HUD quest completed reputation 395 rank 1294 goodwill 859 rubles 1500 items 16' -or
+            $hostLog -notmatch 'host character world exit save verified: .*Stalker.scop') {throw "Character overwrite, backup, shared reward or saved progress resume failed: $probeRoot"}
+        if(!($backups | Where-Object {(Get-FileHash $_.FullName).Hash -eq $firstCharacterHash})) {throw "Character backup did not preserve the previous exit save bytes: $probeRoot"}
+        $hostSaves=Join-Path $probeRoot 'host/appdata/savedgames'
+        if(!(Test-Path (Join-Path $hostSaves 'Stalker.scoc')) -or !(Test-Path (Join-Path $hostSaves 'Stalker.coopworld'))) {throw 'Named host script-state or journal metadata missing.'}
+        $scopeBefore=(Get-FileHash (Join-Path $hostSaves 'Stalker.coopworld')).Hash
+        $hostConfig=Join-Path $probeRoot 'host/appdata/user.ltx'
+        $hostSettings=@(Get-Content $hostConfig | Where-Object {$_ -notmatch '^start |^coop_'})
+        $hostSettings+=@('coop_host 27889 1 1 1','start server(Stalker/single/alife/load) client(localhost)')
+        $hostSettings | Set-Content $hostConfig -Encoding ascii
+        $hostReopened=Start-OwnedProbe 'host';$owned+=$hostReopened
+        Wait-OwnedPhase @($hostReopened) 65
+        Close-OwnedProbe $hostReopened
+        $restoredHostLog=Get-Content (Join-Path $probeRoot 'host/appdata/logs/xray_deadparrot.log') -Raw
+        if($restoredHostLog -notmatch 'character exit save verified: .*stalker.coopchar items 16 rubles 1500 reputation 50' -or
+            $restoredHostLog -notmatch 'host character world exit save verified:' -or
+            $restoredHostLog -match 'FATAL ERROR|SCRIPT ERROR|CoopNet update failed' -or
+            (Get-FileHash (Join-Path $hostSaves 'Stalker.coopworld')).Hash -ne $scopeBefore) {throw "Named host world/script-state/progress restore failed: $probeRoot"}
+        Write-Output "NATIVE_GUEST_FEATURES_PASS: stock HUD, radio delivery, quest completion, money/item/reputation/rank rewards, portable exit save, exact previous-copy backup, saved-character resume and named host world/script-state/progress restore verified. Logs: $probeRoot"
+    }
     if($AppearanceProbe) {
         $equipped=[regex]::Matches($hostLog,'appearance probe equipped: object (\d+) weapon (\S+) outfit (\S+) body (\S+)')
         $groups=$equipped | Group-Object {$_.Groups[1].Value}

@@ -12,11 +12,13 @@ struct GuestSave {
     GuestInventoryState inventory;
 };
 inline bool valid_guest_save(const GuestSave& v) {
-    if (!coopnet::valid_actor_community(v.inventory.community) || !v.scope || !v.character || !v.game || !v.mods || !v.sequence || v.inventory.items.size()>256 ||
+    if (!coopnet::valid_progress(v.inventory.progress) || v.inventory.rewards.size()>65535 || v.inventory.personal_goodwill.size()>4096 || !coopnet::valid_actor_community(v.inventory.community) || !v.scope || !v.character || !v.game || !v.mods || !v.sequence || v.inventory.items.size()>256 ||
         !std::isfinite(v.condition.health) || v.condition.health< -1 || v.condition.health>1 ||
         !std::isfinite(v.condition.power) || v.condition.power< -1 || v.condition.power>1 ||
         !std::isfinite(v.condition.radiation) || v.condition.radiation<0 || v.condition.radiation>1) return false;
-    std::size_t total=69;
+    std::set<std::uint64_t> rewards; for(auto id:v.inventory.rewards) if(!id || !rewards.insert(id).second) return false;
+    std::set<std::uint16_t> personal; for(const auto& relation:v.inventory.personal_goodwill) if(relation.first==0xffff || !personal.insert(relation.first).second || relation.second < -1000000 || relation.second>1000000) return false;
+    std::size_t total=16384+v.inventory.personal_goodwill.size()*6+v.inventory.rewards.size()*8;
     for (const auto& item:v.inventory.items) {
         if (item.section.empty() || item.section.size()>128 || item.spawn.empty() || item.spawn.size()>=16384) return false;
         for (unsigned char c:item.section) if (!((c>='a' && c<='z') || (c>='A' && c<='Z') ||
@@ -32,7 +34,7 @@ inline std::vector<std::uint8_t> encode_guest_save(const GuestSave& v) {
     auto integer=[&](std::uint64_t value,unsigned width) {
         for (unsigned i=0;i<width;++i) bytes.push_back(static_cast<std::uint8_t>(value>>(8*i)));
     };
-    integer(0x33534347,4); // GCS3 retains the guest's chosen faction.
+    integer(0x34534347,4); // GCS4 adds per-character reputation, faction and personal goodwill.
     for (auto value:{v.scope,v.character,v.game,v.mods,v.sequence}) integer(value,8);
     for (float value:{v.condition.health,v.condition.power,v.condition.radiation}) {
         std::uint32_t bits; std::memcpy(&bits,&value,4); integer(bits,4);
@@ -40,6 +42,11 @@ inline std::vector<std::uint8_t> encode_guest_save(const GuestSave& v) {
     integer(v.inventory.active_slot,2); integer(v.inventory.items.size(),2);
     integer(v.inventory.has_money,1); integer(v.inventory.money,4);
     integer(v.inventory.community.size(),1); bytes.insert(bytes.end(),v.inventory.community.begin(),v.inventory.community.end());
+    coopnet::Writer progress; coopnet::write_progress(progress,v.inventory.progress);
+    integer(progress.bytes.size(),2); bytes.insert(bytes.end(),progress.bytes.begin(),progress.bytes.end());
+    integer(v.inventory.personal_goodwill.size(),2);
+    for(const auto& relation:v.inventory.personal_goodwill) {integer(relation.first,2);integer(static_cast<std::uint32_t>(relation.second),4);}
+    integer(v.inventory.rewards.size(),2); for(auto id:v.inventory.rewards) integer(id,8);
     for (const auto& item:v.inventory.items) {
         integer(item.section.size(),1); integer(item.spawn.size(),2);
         bytes.insert(bytes.end(),item.section.begin(),item.section.end());
@@ -56,7 +63,7 @@ inline bool decode_guest_save(const std::vector<std::uint8_t>& bytes,GuestSave& 
         return true;
     };
     GuestSave v; std::uint64_t magic,slot,count;
-    if (!integer(magic,4) || (magic!=0x31534347 && magic!=0x32534347 && magic!=0x33534347) || !integer(v.scope,8) || !integer(v.character,8) ||
+    if (!integer(magic,4) || (magic!=0x31534347 && magic!=0x32534347 && magic!=0x33534347 && magic!=0x34534347) || !integer(v.scope,8) || !integer(v.character,8) ||
         !integer(v.game,8) || !integer(v.mods,8) || !integer(v.sequence,8)) return false;
     for (auto* value:{&v.condition.health,&v.condition.power,&v.condition.radiation}) {
         std::uint64_t raw; if (!integer(raw,4)) return false;
@@ -69,9 +76,23 @@ inline bool decode_guest_save(const std::vector<std::uint8_t>& bytes,GuestSave& 
         if (!integer(present,1) || present>1 || !integer(money,4)) return false;
         v.inventory.has_money=present!=0; v.inventory.money=static_cast<std::uint32_t>(money);
     }
-    if (magic==0x33534347) {
+    if (magic>=0x33534347) {
         std::uint64_t size; if (!integer(size,1) || size>64 || size>bytes.size()-offset) return false;
         v.inventory.community.assign(bytes.begin()+offset,bytes.begin()+offset+static_cast<std::size_t>(size)); offset+=static_cast<std::size_t>(size);
+    }
+    if(magic>=0x34534347) {
+        std::uint64_t size; if(!integer(size,2) || size>bytes.size()-offset || size>16384) return false;
+        const std::vector<std::uint8_t> data(bytes.begin()+offset,bytes.begin()+offset+static_cast<std::size_t>(size)); offset+=static_cast<std::size_t>(size);
+        coopnet::Reader reader(data); if(!coopnet::read_progress(reader,v.inventory.progress) || reader.remaining()) return false;
+        if(!integer(size,2) || size>4096) return false;
+        std::set<std::uint16_t> ids;
+        for(unsigned i=0;i<size;++i) {
+            std::uint64_t id,raw; if(!integer(id,2) || id==0xffff || !ids.insert(static_cast<std::uint16_t>(id)).second || !integer(raw,4)) return false;
+            const auto bits=static_cast<std::uint32_t>(raw); std::int32_t value; std::memcpy(&value,&bits,4);
+            v.inventory.personal_goodwill.emplace_back(static_cast<std::uint16_t>(id),value);
+        }
+        if(!integer(size,2)) return false;
+        for(unsigned i=0;i<size;++i) {std::uint64_t id; if(!integer(id,8)) return false; v.inventory.rewards.push_back(id);}
     }
     for (std::uint64_t i=0;i<count;++i) {
         std::uint64_t section,size;

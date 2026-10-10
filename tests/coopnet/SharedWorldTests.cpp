@@ -26,11 +26,13 @@ int main() {
     SharedAssembly assembly; require(assembly.accept(chunk) && assembly.complete()); chunk.offset=1; require(!assembly.accept(chunk));
     HostPump host; ClientPump client; auto links=MemoryTransport::pair(); Identity token=10;
     host.start(123,1,{1,1},[&] { return ++token; }); require(host.attach(1,std::move(links.second))); client.start(std::move(links.first),2,{1,1});
-    auto pump=[&] { host.update(.01); client.update(.01); }; unsigned npc_applied=0,quests_applied=0,containers_applied=0;
+    auto pump=[&] { host.update(.01); client.update(.01); }; unsigned npc_applied=0,quests_applied=0,containers_applied=0,radio_applied=0;
+    std::vector<RadioRecord> decoded_radio;
     client.set_shared_world_sink([&](SharedKind kind,std::uint32_t,const std::vector<std::uint8_t>& payload) {
         if (kind==SharedKind::NPC) { require(decode_npcs(payload,decoded)); ++npc_applied; }
         else if (kind==SharedKind::Quests) { require(decode_quests(payload,decoded_quests)); ++quests_applied; }
-        else { require(decode_containers(payload,decoded_containers)); ++containers_applied; }
+        else if(kind==SharedKind::Containers) { require(decode_containers(payload,decoded_containers)); ++containers_applied; }
+        else {require(decode_radio(payload,decoded_radio));++radio_applied;}
     });
     for (unsigned i=0;i<10;++i) pump();
     require(host.publish_shared_world(SharedKind::NPC,10,1,bytes)); require(host.publish_shared_world(SharedKind::Quests,10,1,quest_bytes)); pump(); require(!npc_applied && !quests_applied);
@@ -40,6 +42,11 @@ int main() {
     require(host.send_baseline(player,baseline,baseline_bytes)); for (unsigned i=0;i<10;++i) pump(); require(client.acknowledge_baseline()); pump();
     require(host.assign_level(player,10,666)); pump(); require(client.acknowledge_level(10)); for (unsigned i=0;i<10;++i) pump(); require(npc_applied==1 && quests_applied==1);
     require(containers_applied==1 && decoded_containers[0].pose.anchor==800);
+    require(host.publish_shared_world(SharedKind::Radio,10,1,encode_radio({{1,123,5000,0,"Stalker","Joined the session","ui_inGame2_radio"}})));
+    for(unsigned i=0;i<10;++i) pump();
+    require(client.session().state()==ClientState::Connected && radio_applied==1 && decoded_radio[0].text=="Joined the session");
+    require(host.publish_shared_world(SharedKind::Radio,10,2,encode_radio({{1,123,5000,0,"Stalker","Joined the session","ui_inGame2_radio"},{2,124,5000,1,"Quest","Completed",""}})));
+    for(unsigned i=0;i<10;++i) pump(); require(radio_applied==2 && decoded_radio.size()==2);
     container.closed=true; container.can_take=false;
     require(host.publish_shared_world(SharedKind::Containers,10,2,encode_containers({container})));
     for (unsigned i=0;i<10;++i) pump(); require(containers_applied==2 && decoded_containers[0].closed && !decoded_containers[0].can_take);

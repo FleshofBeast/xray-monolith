@@ -17,7 +17,11 @@ int main() {
     require(decoded.inventory.community=="actor_stalker");
     // A pre-money GCS1 record must preserve its native items and avoid resetting
     // a character's starting money when upgraded.
-    auto legacy2=bytes; legacy2[3]='2'; legacy2.erase(legacy2.begin()+65,legacy2.begin()+66+save.inventory.community.size());
+    auto legacy3=bytes; legacy3[3]='3';
+    const auto progress_offset=66+save.inventory.community.size();
+    legacy3.erase(legacy3.begin()+progress_offset,legacy3.begin()+progress_offset+17);
+    require(decode_guest_save(legacy3,decoded) && !decoded.inventory.progress.present);
+    auto legacy2=legacy3; legacy2[3]='2'; legacy2.erase(legacy2.begin()+65,legacy2.begin()+66+save.inventory.community.size());
     require(decode_guest_save(legacy2,decoded) && decoded.inventory.community.empty() && decoded.inventory.money==314159);
     auto legacy=legacy2; legacy[3]='1'; legacy.erase(legacy.begin()+60,legacy.begin()+65);
     require(decode_guest_save(legacy,decoded) && !decoded.inventory.has_money && decoded.inventory.money==0 && decoded.inventory.items.size()==2);

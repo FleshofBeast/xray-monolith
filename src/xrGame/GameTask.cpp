@@ -1,5 +1,6 @@
 #include "pch_script.h"
 #include "GameTask.h"
+#include "../CoopNet/EngineActorBridge.h"
 #include "../CoopNet/EngineWorldBridge.h"
 #include "ui/xrUIXmlParser.h"
 #include "encyclopedia_article.h"
@@ -41,6 +42,8 @@ CGameTask::CGameTask()
 void CGameTask::SetTaskState(ETaskState state)
 {
     if (engine_coopnet::world_level_is_replica()) return;
+    engine_coopnet::SharedQuestRewardScope reward(m_ID.size()?m_ID.c_str():"",m_ReceiveTime,
+        state==eTaskStateCompleted && m_task_state==eTaskStateInProgress);
 	m_task_state = state;
 	if ((m_task_state == eTaskStateFail) || (m_task_state == eTaskStateCompleted))
 	{

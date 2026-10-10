@@ -6,6 +6,7 @@
 #include "script_game_object.h"
 #include "script_game_object_impl.h"
 #include "InventoryOwner.h"
+#include "../CoopNet/EngineActorBridge.h"
 #include "Pda.h"
 #include "xrMessages.h"
 #include "character_info.h"
@@ -626,6 +627,7 @@ void CScriptGameObject::TransferItem(CScriptGameObject* pItem, CScriptGameObject
 	CGameObject::u_EventGen(P, GE_TRADE_BUY, pForWho->object().ID());
 	P.w_u16(pIItem->object().ID());
 	CGameObject::u_EventSend(P);
+	engine_coopnet::record_quest_reward_item(pIItem->object().ID(),pForWho->object().ID());
 }
 
 void CScriptGameObject::TakeItem(CScriptGameObject* pItem)

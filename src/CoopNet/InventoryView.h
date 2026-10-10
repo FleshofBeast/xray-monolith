@@ -1,5 +1,6 @@
 #pragma once
 #include "Gameplay.h"
+#include "PlayerProgress.h"
 #include <set>
 #include <algorithm>
 namespace coopnet {
@@ -20,6 +21,9 @@ struct InventoryView {
     std::vector<InventoryViewItem> items;
     std::uint32_t money=0;
     std::string community;
+    PlayerProgress progress;
+    bool has_condition=false;
+    float health=1,power=1,radiation=0;
     std::vector<std::pair<Identity,std::int32_t>> npc_disposition;
 };
 struct InventoryViewChunk {
@@ -46,14 +50,14 @@ inline bool valid_view_item(const InventoryViewItem& item) {
 }
 inline bool valid_view_chunk(const InventoryViewChunk& chunk) {
     const auto& v=chunk.view;
-    if (!valid_npc_disposition(v) || !valid_actor_community(v.community) || !v.actor || !v.generation || !v.level || !v.revision || chunk.total>256 || v.items.size()>32 ||
+    if (!std::isfinite(v.health) || v.health < -1 || v.health>1 || !std::isfinite(v.power) || v.power < -1 || v.power>1 || !std::isfinite(v.radiation) || v.radiation<0 || v.radiation>1 || !valid_progress(v.progress) || !valid_npc_disposition(v) || !valid_actor_community(v.community) || !v.actor || !v.generation || !v.level || !v.revision || chunk.total>256 || v.items.size()>32 ||
         chunk.offset+v.items.size()>chunk.total || (chunk.total && v.items.empty()) || (!chunk.total && chunk.offset)) return false;
     std::set<Identity> identities;
     for (const auto& item:v.items) if (!valid_view_item(item) || !identities.insert(item.item).second) return false;
     return true;
 }
 inline bool valid_inventory_view(const InventoryView& view) {
-    if (!valid_npc_disposition(view) || !valid_actor_community(view.community) || !view.actor || !view.generation || !view.level || !view.revision || view.items.size()>256) return false;
+    if (!valid_progress(view.progress) || !valid_npc_disposition(view) || !valid_actor_community(view.community) || !view.actor || !view.generation || !view.level || !view.revision || view.items.size()>256) return false;
     std::set<Identity> identities; std::set<std::uint16_t> slots; bool active=!view.active;
     for (const auto& item:view.items) {
         if (!valid_view_item(item) || !identities.insert(item.item).second ||
@@ -69,6 +73,8 @@ inline std::vector<std::uint8_t> encode_view_chunk(const InventoryViewChunk& chu
     w.integer(chunk.offset,2); w.integer(chunk.total,2); w.integer(v.items.size(),1);
     w.integer(v.money,4);
     w.integer(v.community.size(),1); w.bytes.insert(w.bytes.end(),v.community.begin(),v.community.end());
+    write_progress(w,v.progress);
+    w.integer(v.has_condition,1);write_float(w,v.health);write_float(w,v.power);write_float(w,v.radiation);
     w.integer(v.npc_disposition.size(),2);
     for (const auto& relation:v.npc_disposition) { w.integer(relation.first,8); w.integer(static_cast<std::uint32_t>(relation.second),4); }
     for (const auto& item:v.items) {
@@ -89,6 +95,8 @@ inline bool decode_view_chunk(const std::vector<std::uint8_t>& bytes,InventoryVi
     std::uint64_t money; if (!r.integer(money,4)) return false; c.view.money=static_cast<std::uint32_t>(money);
     std::uint64_t community_size; if (!r.integer(community_size,1) || community_size>64 || community_size>r.remaining()) return false;
     for (std::uint64_t i=0;i<community_size;++i) { std::uint64_t ch; if (!r.integer(ch,1) || !((ch>='a' && ch<='z') || ch=='_')) return false; c.view.community.push_back(static_cast<char>(ch)); }
+    if(!read_progress(r,c.view.progress)) return false;
+    std::uint64_t present; if(!r.integer(present,1) || present>1 || !read_float(r,c.view.health) || !read_float(r,c.view.power) || !read_float(r,c.view.radiation)) return false; c.view.has_condition=present!=0;
     std::uint64_t relations; if (!r.integer(relations,2) || relations>128) return false;
     for (std::uint64_t i=0;i<relations;++i) {
         Identity anchor; std::uint64_t raw; if (!r.integer(anchor,8) || !r.integer(raw,4)) return false;
@@ -127,7 +135,7 @@ public:
         if (!chunk.offset) { clear(); pending_=chunk.view; pending_.items.clear(); total_=chunk.total; }
         if (!pending_.actor || pending_.actor!=chunk.view.actor || pending_.active!=chunk.view.active ||
             pending_.generation!=chunk.view.generation || pending_.level!=chunk.view.level || pending_.revision!=chunk.view.revision ||
-            pending_.money!=chunk.view.money || pending_.community!=chunk.view.community || pending_.npc_disposition!=chunk.view.npc_disposition || total_!=chunk.total || pending_.items.size()!=chunk.offset) return false;
+            pending_.has_condition!=chunk.view.has_condition || pending_.health!=chunk.view.health || pending_.power!=chunk.view.power || pending_.radiation!=chunk.view.radiation || !(pending_.progress==chunk.view.progress) || pending_.money!=chunk.view.money || pending_.community!=chunk.view.community || pending_.npc_disposition!=chunk.view.npc_disposition || total_!=chunk.total || pending_.items.size()!=chunk.offset) return false;
         for (const auto& item:chunk.view.items) if (!identities_.insert(item.item).second) return false;
         pending_.items.insert(pending_.items.end(),chunk.view.items.begin(),chunk.view.items.end());
         if (pending_.items.size()==total_) {

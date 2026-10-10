@@ -61,8 +61,29 @@ struct GuestInventoryState {
     std::uint32_t money=0;
     bool has_money=false;
     std::string community;
+    coopnet::PlayerProgress progress;
+    std::vector<std::pair<std::uint16_t,std::int32_t>> personal_goodwill;
+    std::vector<std::uint64_t> rewards;
 };
 bool capture_guest_inventory(std::uint16_t actor,GuestInventoryState& state);
+struct SharedQuestReward {
+    std::uint64_t id=0;
+    std::string quest;
+    std::uint32_t money=0;
+    coopnet::PlayerProgress before,after;
+    std::vector<GuestInventoryItem> items;
+    std::vector<std::uint64_t> characters;
+};
+class SharedQuestRewardScope {
+    bool tracked=false;
+public:
+    SharedQuestRewardScope(const char* quest,std::uint64_t received,bool completed);
+    ~SharedQuestRewardScope();
+};
+void record_quest_reward_item(std::uint16_t item,std::uint16_t recipient);
+bool take_shared_quest_reward(SharedQuestReward& reward);
+bool grant_shared_quest_reward(std::uint16_t actor,const SharedQuestReward& reward,const GuestInventoryState& state);
+void clear_shared_quest_rewards();
 bool restore_guest_inventory(std::uint16_t actor,const GuestInventoryState& state);
 std::uint64_t guest_save_scope();
 bool read_guest_save_file(const char* name,std::vector<std::uint8_t>& bytes);
@@ -75,9 +96,16 @@ struct NativeSessionItem {
 struct NativeInventoryViewItem { std::uint16_t object=0xffff; std::uint64_t incarnation=0; coopnet::InventoryViewItem state; };
 bool capture_guest_inventory_view(std::uint16_t actor,std::vector<NativeInventoryViewItem>& items,std::uint16_t& active);
 bool capture_join_character(coopnet::InventoryView& character);
+bool capture_owned_character(coopnet::InventoryView& character);
+bool save_host_character_world(const std::string& name);
+bool read_character_save(std::uint64_t character,coopnet::InventoryView& inventory);
+bool write_character_save(std::uint64_t character,const std::string& name,const coopnet::InventoryView& inventory,const ActorConditionState& condition);
 std::string actor_community(std::uint16_t actor);
 std::vector<std::uint16_t> guest_actor_objects();
 bool faction_matches_host(const std::string& community);
+bool capture_player_progress(std::uint16_t object,coopnet::PlayerProgress& progress);
+void update_guest_ui(double elapsed);
+void exercise_guest_features_probe(double elapsed);
 void exercise_guest_faction_probe(std::uint16_t actor,double elapsed);
 void record_guest_mutant_probe_hit(std::uint16_t actor,std::uint16_t attacker);
 void capture_guest_disposition(std::uint64_t session,std::uint16_t actor,coopnet::InventoryView& view);

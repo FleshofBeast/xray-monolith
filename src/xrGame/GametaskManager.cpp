@@ -137,6 +137,8 @@ void CGameTaskManager::CoopTasksChanged()
 {
     m_flags.set(eChanged,TRUE);
     UpdateActiveTask();
+    Level().MapManager().DisableAllPointers();
+    if(auto* active=ActiveTask()) if(auto* location=active->LinkedMapLocation()) location->EnablePointer();
     if (CurrentGameUI()) CurrentGameUI()->UpdatePda();
 }
 

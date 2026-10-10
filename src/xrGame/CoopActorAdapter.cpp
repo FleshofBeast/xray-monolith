@@ -31,6 +31,7 @@
 #include "../CoopNet/EngineWorldBridge.h"
 #include "../CoopNet/WorldState.h"
 #include "../CoopNet/GuestSave.h"
+#include "../CoopNet/CharacterSave.h"
 #include "entity_alive.h"
 #include "ai/trader/ai_trader.h"
 #include "ai/stalker/ai_stalker.h"
@@ -63,6 +64,7 @@
 #include "game_cl_single.h"
 #include "GametaskManager.h"
 #include "GameTask.h"
+#include "map_location.h"
 #include "alife_registry_wrappers.h"
 #include "PhraseDialog.h"
 #include "PhraseDialogManager.h"
@@ -113,6 +115,73 @@ bool apply_actor_community(CActor* actor,const std::string& community,bool reset
     return true;
 }
 namespace { u16 mutant_probe_stationary=0xffff,mutant_probe_attacker=0xffff; }
+bool reward_actor_pending(std::uint16_t object);
+void forget_native_awards(std::uint16_t object);
+void forget_all_native_awards();
+namespace {
+std::map<u16,std::string> progress_npc_keys() {
+    static std::map<u16,std::string> cached; static std::uint64_t incarnation=0; static u32 refreshed=0;
+    LocalActorPose pose; capture_local_actor(pose);
+    if(incarnation==pose.incarnation && Device.dwTimeGlobal-refreshed<5000) return cached;
+    std::map<u16,std::string> keys; std::map<std::string,unsigned> counts;
+    for(const auto& entry:ai().alife().objects().objects()) if(auto* trader=smart_cast<CSE_ALifeTraderAbstract*>(entry.second))
+        if(trader->m_SpecificCharacter.size()) ++counts[trader->m_SpecificCharacter.c_str()];
+    for(const auto& entry:ai().alife().objects().objects()) {
+        auto* npc=smart_cast<CSE_ALifeDynamicObject*>(entry.second); auto* trader=smart_cast<CSE_ALifeTraderAbstract*>(entry.second);
+        if(!npc || !trader) continue;
+        if(npc->m_story_id!=ALife::_STORY_ID(-1)) keys[entry.first]="s"+std::to_string(npc->m_story_id);
+        else if(trader->m_SpecificCharacter.size() && counts[trader->m_SpecificCharacter.c_str()]==1) {
+            const auto key="p_"+std::string(trader->m_SpecificCharacter.c_str());
+            coopnet::PlayerProgress check; check.present=true; check.story={{key,0}};
+            if(coopnet::valid_progress(check)) keys[entry.first]=key;
+        }
+    }
+    cached=keys;incarnation=pose.incarnation;refreshed=Device.dwTimeGlobal;return keys;
+}
+}
+bool capture_player_progress(std::uint16_t object,coopnet::PlayerProgress& output) {
+    if(!g_pGameLevel || !Level().Server || !ai().get_alife()) return false;
+    auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(object)); if(!actor) return false;
+    coopnet::PlayerProgress p; p.present=true; p.reputation=actor->Reputation(); p.rank=actor->Rank();
+    for(unsigned i=0;i<=CHARACTER_COMMUNITY::GetMaxIndex();++i) {
+        const auto index=static_cast<CHARACTER_COMMUNITY_INDEX>(i);
+        const auto* community=CHARACTER_COMMUNITY::GetByIndex(index);
+        p.factions.emplace_back(community->id.c_str(),RELATION_REGISTRY().GetCommunityGoodwill(index,object));
+    }
+    for(const auto& entry:progress_npc_keys()) {
+        const int goodwill=RELATION_REGISTRY().GetGoodwill(entry.first,object);
+        if(goodwill) p.story.emplace_back(entry.second,goodwill);
+    }
+    if(!coopnet::valid_progress(p)) return false; output=std::move(p); return true;
+}
+bool apply_player_progress(CActor* actor,const coopnet::PlayerProgress& p) {
+    if(!actor || !coopnet::valid_progress(p)) return false;
+    if(!p.present) return true; // Older durable journals have no reputation payload.
+    for(const auto& faction:p.factions) if(!CHARACTER_COMMUNITY::GetById(faction.first.c_str(),true)) return false;
+    for(const auto& faction:p.factions) {
+        const auto* community=CHARACTER_COMMUNITY::GetById(faction.first.c_str(),true);
+        if(!community) return false;
+        RELATION_REGISTRY().SetCommunityGoodwill(community->index,actor->ID(),faction.second);
+    }
+    if(actor->Reputation()!=p.reputation) actor->SetReputation(p.reputation);
+    if(actor->Rank()!=p.rank) actor->SetRank(p.rank);
+    if(ai().get_alife()) for(const auto& entry:progress_npc_keys()) {
+        int goodwill=0;
+        for(const auto& relation:p.story) if(relation.first==entry.second) {goodwill=relation.second;break;}
+        RELATION_REGISTRY().SetGoodwill(entry.first,actor->ID(),goodwill);
+    }
+    return true;
+}
+void update_guest_ui(double elapsed) {
+    LocalActorPose pose;
+    if(!world_level_is_replica() || !capture_local_actor(pose) || !CurrentGameUI()) return;
+    static std::uint64_t initialized=0;
+    luabind::functor<void> update;
+    if(!ai().script_engine().functor("coopnet_guest_ui.update",update)) return;
+    const bool first=initialized!=pose.incarnation;
+    update(first,static_cast<u32>(elapsed*1000)); initialized=pose.incarnation;
+    if(first) Msg("* CoopNet guest stock HUD/PDA presentation initialized: actor %u",pose.object);
+}
 void record_guest_mutant_probe_hit(std::uint16_t actor,std::uint16_t attacker) {
     if (actor==mutant_probe_stationary) mutant_probe_attacker=attacker;
 }
@@ -276,7 +345,7 @@ bool show_session_join_news(const std::string& name) {
     GAME_NEWS_DATA news;
     news.news_caption="CoopNet";
     const std::string text=name+" has joined the session.";
-    news.news_text=text.c_str(); news.texture_name="ui_inGame2_PDA_icon";
+    news.news_text=text.c_str(); news.texture_name="ui_iconsTotal_grouping";
     g_actor->AddGameNews(news);
     Msg("* CoopNet radio join announcement: %s",text.c_str()); return true;
 }
@@ -287,7 +356,7 @@ bool show_session_mismatch_news(const std::string& name) {
         !CurrentGameUI()->m_pMessagesWnd || !g_actor->game_news_registry) return false;
     GAME_NEWS_DATA news; news.news_caption="CoopNet";
     const std::string text="\""+name+"\" attempted to join but a version mismatch was detected.";
-    news.news_text=text.c_str(); news.texture_name="ui_inGame2_PDA_icon"; g_actor->AddGameNews(news);
+    news.news_text=text.c_str(); news.texture_name="ui_iconsTotal_grouping"; g_actor->AddGameNews(news);
     Msg("* CoopNet radio version mismatch: %s",text.c_str()); return true;
 }
 void exercise_player_name_probe(double elapsed) {
@@ -336,6 +405,8 @@ xr_map<const CGameObject*,WorldObject> world_objects;
 std::uint64_t world_incarnation=0, replica_frames=0, replica_schedules=0;
 unsigned world_replica_count=0;
 bool collect_world_objects=false;
+std::deque<coopnet::RadioRecord> radio_history;
+std::uint64_t radio_sequence=0,radio_received=0,radio_session=0;
 u16 replica_local_root=0xffff;
 std::string replica_world_save;
 std::uint64_t npc_session=0;
@@ -354,6 +425,7 @@ bool safe_baseline_name(const char* name) {
     return true;
 }
 }
+#include "CoopNetCharacterFiles.inc"
 bool read_join_profile_file(std::vector<std::uint8_t>& bytes) {
     string_path path; FS.update_path(path,"$app_data_root$","coopnet-connections.dat");
     auto* reader=FS.r_open(path); if (!reader) return false;
@@ -485,7 +557,50 @@ void begin_world_replication() {
         if (object && !world_objects.count(object)) world_objects.emplace(object,WorldObject{++world_incarnation,false,false});
     }
 }
-void end_world_replication() { collect_world_objects=false; }
+void end_world_replication() {
+    clear_shared_quest_rewards(); collect_world_objects=false; radio_history.clear(); radio_sequence=radio_received=radio_session=0;
+}
+void capture_radio_news(const GAME_NEWS_DATA& news) {
+    if(!collect_world_objects || world_level_is_replica()) return;
+    coopnet::RadioRecord n; n.id=++radio_sequence; n.time=news.receive_time;
+    n.show_time=static_cast<std::uint32_t>(std::clamp(news.show_time,0,60000)); n.type=static_cast<std::uint8_t>(news.m_type);
+    if(news.news_caption.size()) n.caption=news.news_caption.c_str();
+    if(news.news_text.size()) n.text=news.news_text.c_str();
+    if(news.texture_name.size()) n.texture=news.texture_name.c_str();
+    if(!coopnet::valid_radio(n)) {Msg("! CoopNet radio broadcast exceeds supported bounds");return;}
+    radio_history.push_back(std::move(n));
+    std::size_t total=2; for(const auto& v:radio_history) total+=27+v.caption.size()+v.text.size()+v.texture.size();
+    while(radio_history.size()>256 || total>coopnet::shared_limit-8192) {
+        const auto& v=radio_history.front(); total-=27+v.caption.size()+v.text.size()+v.texture.size(); radio_history.pop_front();
+    }
+}
+bool capture_radio_history(std::uint32_t& level,std::vector<coopnet::RadioRecord>& news) {
+    LocalActorPose pose; if(!capture_local_actor(pose) || world_level_is_replica()) return false;
+    level=pose.level; news.assign(radio_history.begin(),radio_history.end()); return true;
+}
+bool apply_radio_history(std::uint64_t session,std::uint32_t level,const std::vector<coopnet::RadioRecord>& news) {
+    LocalActorPose pose;
+    if(!world_level_is_replica() || !capture_local_actor(pose) || pose.level!=level || !CurrentGameUI() || !g_actor->game_news_registry) return false;
+    if(radio_session!=session) {radio_session=session;radio_received=0;}
+    const auto& existing=g_actor->game_news_registry->registry().objects();
+    std::vector<GAME_NEWS_DATA> baseline(existing.begin(),existing.end());
+    std::vector<bool> used(baseline.size(),false);
+    for(const auto& record:news) if(record.id>radio_received) {
+        bool already=false;
+        for(std::size_t i=0;i<baseline.size();++i) if(!used[i] && baseline[i].receive_time==record.time &&
+            baseline[i].m_type==record.type && baseline[i].news_caption==record.caption.c_str() &&
+            baseline[i].news_text==record.text.c_str() && baseline[i].texture_name==record.texture.c_str()) {
+            used[i]=true;already=true;break;
+        }
+        if(already) {radio_received=record.id;continue;}
+        GAME_NEWS_DATA n; n.news_caption=record.caption.c_str(); n.news_text=record.text.c_str(); n.texture_name=record.texture.c_str();
+        n.m_type=static_cast<GAME_NEWS_DATA::eNewsType>(record.type); n.show_time=record.show_time;
+        g_actor->AddGameNews(n); radio_received=record.id;
+        g_actor->game_news_registry->registry().objects().back().receive_time=record.time;
+        Msg("* CoopNet radio broadcast received: id %llu caption %s text %s",record.id,record.caption.c_str(),record.text.c_str());
+    }
+    CurrentGameUI()->UpdatePda(); return true;
+}
 bool capture_party_exit(const std::vector<std::uint16_t>& actors,NativePartyExit& exit) {
     if (!g_pGameLevel || !g_pGameLevel->bReady || world_level_is_replica()) return false;
     exit={};
@@ -1195,6 +1310,7 @@ bool capture_shared_quests(std::uint64_t session,std::uint32_t& level,coopnet::Q
         if (task->m_map_object_id!=0xffff && !q.spot.empty()) q.target=coopnet::world_anchor(session,task->m_map_object_id);
         q.priority=task->m_priority; q.times={task->m_ReceiveTime,task->m_FinishTime,task->m_TimeToComplete,task->m_timer_finish}; quests.tasks.push_back(std::move(q));
     }
+    if(auto* active=Level().GameTaskManager().ActiveTask()) quests.active=active->m_ID.c_str();
     for (const auto& info:g_actor->m_known_info_registry->registry().objects()) quests.infos.emplace_back(info.c_str());
     return true;
 }
@@ -1221,6 +1337,7 @@ bool apply_shared_quests(std::uint64_t session,std::uint32_t level,const coopnet
         if (q.state==eTaskStateInProgress && target!=0xffff && !q.spot.empty() && (task->m_map_object_id!=target || xr_strcmp(task->m_map_location.size() ? task->m_map_location.c_str() : "",q.spot.c_str())))
             task->ChangeMapLocation(q.spot.c_str(),target);
         if (q.state==eTaskStateInProgress && (q.spot.empty() || target==0xffff)) task->RemoveMapLocations(false);
+        if(auto* location=task->LinkedMapLocation()) location->SetHint(q.hint.c_str());
         task->ApplyCoopState(static_cast<ETaskState>(q.state));
     }
     auto& infos=g_actor->m_known_info_registry->registry().objects(); infos.clear(); for (const auto& info:quests.infos) infos.push_back(shared_str(info.c_str()));
@@ -1229,6 +1346,7 @@ bool apply_shared_quests(std::uint64_t session,std::uint32_t level,const coopnet
         if (g_actor->HasInfo(shared_str("coopnet_shared_probe_info"))!=expected) throw std::runtime_error("Shared quest info registry mismatch");
         Msg("* CoopNet shared probe: guest story info %s",expected ? "present" : "removed");
     }
+    if(!manager.ActiveTask() && !quests.active.empty()) {auto* task=manager.HasGameTask(shared_str(quests.active.c_str()),true); if(task) manager.SetActiveTask(task);}
     manager.CoopTasksChanged();
     for (const auto& q:quests.tasks) if (q.id=="coopnet_probe_quest" || q.id=="coopnet_probe_fail") {
         auto* mirrored=manager.HasGameTask(shared_str(q.id.c_str()),false);
@@ -1498,6 +1616,12 @@ std::uint64_t guest_save_scope() {
     if (!g_pGameLevel || !g_pGameLevel->bReady || !Level().Server || world_level_is_replica()) return 0;
     const auto& options=Level().Server->GetConnectOptions();
     if (!options.size()) return 0;
+    const std::string basename=std::string(options.c_str()).substr(0,std::string(options.c_str()).find('/'));
+    string_path scope_path;FS.update_path(scope_path,"$game_saves$",(basename+".coopworld").c_str());
+    if(auto* reader=FS.r_open(scope_path)) {
+        const bool valid=reader->length()==16 && reader->r_u64()==0x31574f43;
+        const auto scope=valid ? reader->r_u64() : 0;FS.r_close(reader);if(scope) return scope;
+    }
     std::uint64_t hash=14695981039346656037ull;
     for (const char* text=options.c_str();*text && *text!='/';++text) {
         hash^=static_cast<unsigned char>(*text); hash*=1099511628211ull;
@@ -1744,12 +1868,18 @@ bool capture_guest_weapon(std::uint16_t owner,std::uint16_t item,unsigned& round
 }
 bool capture_guest_inventory(std::uint16_t owner,GuestInventoryState& output) {
     LocalActorPose pose; if (!capture_guest_actor(owner,pose)) return false;
-    if (guests.find(owner)->second.restoring || guests.find(owner)->second.starter_pending || guests.find(owner)->second.importing) return false;
+    if (reward_actor_pending(owner) || guests.find(owner)->second.restoring || guests.find(owner)->second.starter_pending || guests.find(owner)->second.importing) return false;
     auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(owner));
     if (actor->inventory().m_all.size()>256) return false;
     GuestInventoryState state; state.active_slot=actor->inventory().GetActiveSlot();
     state.money=actor->get_money(); state.has_money=true;
     state.community=actor_community(owner);
+    if(!capture_player_progress(owner,state.progress)) return false;
+    if(ai().get_alife()) for(const auto& entry:ai().alife().objects().objects()) {
+        if(entry.first==owner || !smart_cast<CSE_ALifeTraderAbstract*>(entry.second)) continue;
+        const int goodwill=RELATION_REGISTRY().GetGoodwill(entry.first,owner);
+        if(goodwill) state.personal_goodwill.emplace_back(entry.first,goodwill);
+    }
     for (auto* item:actor->inventory().m_all) {
         auto& object=item->object();
         auto* server=Level().Server->ID_to_entity(object.ID());
@@ -1773,7 +1903,7 @@ bool capture_guest_inventory(std::uint16_t owner,GuestInventoryState& output) {
     output=std::move(state); return true;
 }
 bool capture_guest_inventory_view(std::uint16_t owner,std::vector<NativeInventoryViewItem>& output,std::uint16_t& active) {
-    LocalActorPose pose; if (!capture_guest_actor(owner,pose) || guests.find(owner)->second.restoring || guests.find(owner)->second.starter_pending || guests.find(owner)->second.importing) return false;
+    LocalActorPose pose; if (!capture_guest_actor(owner,pose) || reward_actor_pending(owner) || guests.find(owner)->second.restoring || guests.find(owner)->second.starter_pending || guests.find(owner)->second.importing) return false;
     auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(owner));
     if (actor->inventory().m_all.size()>256) return false;
     std::vector<NativeInventoryViewItem> items;
@@ -1813,11 +1943,21 @@ std::uint64_t join_character_identity(std::uint64_t proposed,bool replace) {
     IWriter* writer=FS.w_open(path); if (!writer) return 0; writer->w_u64(proposed); FS.w_close(writer);
     return proposed;
 }
-bool capture_join_character(coopnet::InventoryView& output) {
-    LocalActorPose pose; if (!capture_local_actor(pose) || world_level_is_replica() || !g_actor->g_Alive() || g_actor->inventory().m_all.size()>256) return false;
+bool capture_owned_character(coopnet::InventoryView& output) {
+    if(world_level_is_replica()) {
+        if(!local_inventory_view.actor || !coopnet::valid_inventory_view(local_inventory_view)) return false;
+        output=local_inventory_view;output.actor=1;output.generation=output.level=output.revision=1;output.npc_disposition.clear();
+        const auto active=output.active;output.active=0;
+        for(std::size_t i=0;i<output.items.size();++i) {auto& item=output.items[i];if(item.item==active) output.active=i+1;item.item=i+1;item.revision=1;}
+        return true;
+    }
+    LocalActorPose pose; if (!capture_local_actor(pose) || g_actor->inventory().m_all.size()>256) return false;
     coopnet::InventoryView character; character.actor=1; character.generation=character.level=character.revision=1;
     character.money=g_actor->get_money();
+    ActorConditionState selected_condition; if(!capture_actor_condition(g_actor->ID(),selected_condition)) return false;
+    character.has_condition=true;character.health=selected_condition.health;character.power=selected_condition.power;character.radiation=selected_condition.radiation;
     character.community=actor_community(g_actor->ID());
+    if(!capture_player_progress(g_actor->ID(),character.progress)) return false;
     for (auto* item:g_actor->inventory().m_all) {
         if (item->object().getDestroy() || item->object().H_Parent()!=g_actor) return false;
         coopnet::InventoryViewItem state;
@@ -1834,6 +1974,13 @@ bool capture_join_character(coopnet::InventoryView& output) {
     }
     if (!coopnet::valid_inventory_view(character)) return false;
     output=std::move(character); return true;
+}
+bool capture_join_character(coopnet::InventoryView& output) {
+    if(strstr(Core.Params,"-coop_guest_features_probe") && !world_level_is_replica() && g_actor) {
+        g_actor->SetReputation(345);g_actor->SetRank(1234);
+        RELATION_REGISTRY().SetCommunityGoodwill(CHARACTER_COMMUNITY::GetById("stalker")->index,g_actor->ID(),789);
+    }
+    return !world_level_is_replica() && g_actor && g_actor->g_Alive() && capture_owned_character(output);
 }
 bool validate_join_character(const coopnet::InventoryView& character) {
     if (!coopnet::valid_inventory_view(character) || !ai().get_alife()) return false;
@@ -1858,6 +2005,8 @@ bool import_join_character(std::uint16_t owner,const coopnet::InventoryView& cha
     LocalActorPose pose; if (!capture_guest_actor(owner,pose) || !validate_join_character(character) || session_items.size()+character.items.size()>768) return false;
     auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(owner)); if (!actor->inventory().m_all.empty()) return false;
     if (!character.community.empty() && !apply_actor_community(actor,character.community,true)) return false;
+    if(!apply_player_progress(actor,character.progress)) return false;
+    if(character.has_condition && !apply_guest_condition(owner,{character.health,character.power,character.radiation})) return false;
     auto& guest=guests.find(owner)->second; guest.imported_character=character; guest.importing=true;
     for (const auto& state:character.items) {
         auto* abstract=Level().spawn_item(state.section.c_str(),actor->Position(),actor->ai_location().level_vertex_id(),owner,true);
@@ -2124,6 +2273,7 @@ void update_local_inventory_view() {
     LocalActorPose pose;
     if (!world_level_is_replica() || !local_inventory_view.actor || !capture_local_actor(pose) || pose.level!=local_inventory_view.level || !Level().Server) return;
     if (!local_inventory_view.community.empty() && !apply_actor_community(g_actor,local_inventory_view.community,inventory_local_incarnation!=pose.incarnation)) return;
+    if(!apply_player_progress(g_actor,local_inventory_view.progress)) return;
     for (const auto& relation:local_inventory_view.npc_disposition) for (const auto& binding:world_objects) {
         if (binding.second.anchor!=relation.first) continue;
         auto* npc=smart_cast<CInventoryOwner*>(const_cast<CGameObject*>(binding.first));
@@ -2220,6 +2370,9 @@ bool restore_guest_inventory(std::uint16_t owner,const GuestInventoryState& stat
     auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(owner));
     if (!state.community.empty() && !apply_actor_community(actor,state.community,true)) return false;
     if (!actor->inventory().m_all.empty()) return false;
+    if(!apply_player_progress(actor,state.progress)) return false;
+    for(const auto& relation:state.personal_goodwill) if(ai().get_alife() && ai().alife().objects().object(relation.first,true))
+        RELATION_REGISTRY().SetGoodwill(relation.first,owner,relation.second);
     xr_vector<u16> created_items;
     for (const auto& record:state.items) {
         if (record.section.empty() || record.section.size()>128 || !pSettings->section_exist(record.section.c_str()) ||
@@ -2253,6 +2406,8 @@ bool restore_guest_inventory(std::uint16_t owner,const GuestInventoryState& stat
     }
     return true;
 }
+#include "CoopNetQuestRewards.inc"
+#include "CoopNetGuestFeaturesProbe.inc"
 void begin_guest_simulation() { Device.Pause(FALSE, TRUE, FALSE, "CoopNet native movement"); }
 std::uint16_t spawn_guest_actor() {
     LocalActorPose local;
@@ -2324,7 +2479,7 @@ bool claim_guest_spawn(std::uint16_t object) {
     Msg("* CoopNet native guest spawned: object %u", object);
     return true;
 }
-void guest_actor_destroyed(std::uint16_t object) { guests.erase(object); }
+void guest_actor_destroyed(std::uint16_t object) { forget_native_awards(object); guests.erase(object); }
 bool capture_guest_actor(std::uint16_t object, LocalActorPose& pose) {
     if (!g_pGameLevel || !g_pGameLevel->bReady || !ai().get_level_graph()) return false;
     auto found = guests.find(object);
@@ -2481,7 +2636,7 @@ void clear_guest_actors() {
     for (const auto& entry : guests) objects.push_back(entry.first);
     for (const auto object : objects) remove_guest_actor(object);
 }
-void guest_level_stopped() { guests.clear(); session_items.clear(); world_level_stopped(); }
+void guest_level_stopped() { forget_all_native_awards(); guests.clear(); session_items.clear(); world_level_stopped(); }
 void local_actor_spawned() { ++local_incarnation; local_controls = {}; controls_time = 0; local_weapon_buttons=0; local_movement_probe_active=false;
     local_world_items.clear(); local_world_objects.clear(); retired_world_items.clear(); local_world_session=0;
     loot_probe_phase=0; loot_probe_item=0;

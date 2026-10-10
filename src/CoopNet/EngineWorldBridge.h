@@ -3,11 +3,13 @@
 #include <vector>
 #include "WorldSettings.h"
 #include "SharedWorld.h"
+#include "Radio.h"
 #include "Dialogue.h"
 class CObject;
 class CGameObject;
 class CSE_Abstract;
 class ISheduled;
+struct GAME_NEWS_DATA;
 namespace engine_coopnet {
 // Owner-thread save/load adapter. Names originate locally, never from network payloads.
 bool capture_world_baseline(const char* name,std::uint32_t& level,std::vector<std::uint8_t>& bytes);
@@ -47,6 +49,9 @@ void update_npc_catalogue();
 bool capture_containers(std::uint64_t session,std::uint32_t& level,std::vector<coopnet::ContainerRecord>& records);
 void queue_container_catalogue(std::uint64_t session,std::uint32_t level,const std::vector<coopnet::ContainerRecord>& records);
 void update_container_catalogue();
+void capture_radio_news(const GAME_NEWS_DATA& news);
+bool capture_radio_history(std::uint32_t& level,std::vector<coopnet::RadioRecord>& news);
+bool apply_radio_history(std::uint64_t session,std::uint32_t level,const std::vector<coopnet::RadioRecord>& news);
 bool capture_shared_quests(std::uint64_t session,std::uint32_t& level,coopnet::QuestState& quests);
 // Topic discovery evaluates native preconditions on the host for the requesting
 // guest. A selected topic retains native speaker bindings and offers its root;

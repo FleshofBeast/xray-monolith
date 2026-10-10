@@ -4,8 +4,8 @@
 #include <memory>
 namespace coopnet {
 // Complete, bounded host snapshots; never native spawn/save packets or Lua code.
-enum class SharedKind : std::uint8_t { NPC, Quests, Containers };
-constexpr unsigned shared_kind_count=3;
+enum class SharedKind : std::uint8_t { NPC, Quests, Containers, Radio };
+constexpr unsigned shared_kind_count=4;
 constexpr std::size_t shared_limit=1024*1024;
 inline bool shared_name(const std::string& value,std::size_t limit,bool path=false) {
     if (value.empty() || value.size()>limit || value.find("..")!=std::string::npos) return false;
@@ -76,19 +76,19 @@ struct QuestRecord {
     std::uint32_t priority=0;
     std::array<std::uint64_t,4> times{};
 };
-struct QuestState { std::vector<QuestRecord> tasks; std::vector<std::string> infos; };
+struct QuestState { std::vector<QuestRecord> tasks; std::vector<std::string> infos; std::string active; };
 inline bool valid_quest(const QuestRecord& q) {
     return shared_name(q.id,128) && q.state<=2 && (q.type<=1 || q.type==255) && q.title.size()<=1024 && q.description.size()<=4096 &&
         (q.icon.empty() || shared_name(q.icon,192,true)) && q.hint.size()<=1024 && (q.spot.empty() || shared_name(q.spot,96));
 }
 inline std::vector<std::uint8_t> encode_quests(const QuestState& state) {
-    if (state.tasks.size()>1024 || state.infos.size()>16384) throw std::length_error("Quest limit");
+    if ((!state.active.empty() && !shared_name(state.active,128)) || state.tasks.size()>1024 || state.infos.size()>16384) throw std::length_error("Quest limit");
     SharedWriter w; w.integer(state.tasks.size(),2); std::set<std::string> ids;
     for (const auto& q:state.tasks) {
         if (!valid_quest(q) || !ids.insert(q.id).second) throw std::invalid_argument("Quest record");
         for (const auto* s:{&q.id,&q.title,&q.description,&q.icon,&q.hint,&q.spot}) w.string(*s);
         w.integer(q.state,1); w.integer(q.type,1); w.integer(q.target,8); w.integer(q.priority,4); for (auto t:q.times) w.integer(t,8);
-    } w.integer(state.infos.size(),2); ids.clear(); for (const auto& s:state.infos) { if (!shared_name(s,128) || !ids.insert(s).second) throw std::invalid_argument("Info record"); w.string(s); } return w.bytes;
+    } w.integer(state.infos.size(),2); ids.clear(); for (const auto& s:state.infos) { if (!shared_name(s,128) || !ids.insert(s).second) throw std::invalid_argument("Info record"); w.string(s); } w.string(state.active); return w.bytes;
 }
 inline bool decode_quests(const std::vector<std::uint8_t>& bytes,QuestState& output) {
     if (bytes.size()>shared_limit) return false; Reader r(bytes); std::uint64_t count,n; if (!r.integer(count,2) || count>1024) return false;
@@ -100,6 +100,7 @@ inline bool decode_quests(const std::vector<std::uint8_t>& bytes,QuestState& out
         if (!valid_quest(q) || !ids.insert(q.id).second) return false; result.tasks.push_back(std::move(q));
     }
     if (!r.integer(count,2) || count>16384) return false; ids.clear(); for (unsigned i=0;i<count;++i) { std::string s; if (!shared_string(r,s,128) || !shared_name(s,128) || !ids.insert(s).second) return false; result.infos.push_back(std::move(s)); }
+    if(!shared_string(r,result.active,128) || (!result.active.empty() && !shared_name(result.active,128))) return false;
     if (r.remaining()) return false; output=std::move(result); return true;
 }
 struct SharedChunk { SharedKind kind=SharedKind::NPC; std::uint32_t level=0,revision=0,total=0,offset=0; std::vector<std::uint8_t> bytes; };

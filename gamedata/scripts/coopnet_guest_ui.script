@@ -1,0 +1,41 @@
+-- Stock player presentation callbacks only. World scripts stay on the host.
+local allowed = { actor_status=true, ui_pda_radio_tab=true, ui_pda_npc_tab=true, closecaption=true }
+local function run_presentation(event, delta)
+    local callbacks
+    for i=1,20 do
+        local name,value=debug.getupvalue(axr_main.make_callback,i)
+        if not name then break end
+        if name=="intercepts" then callbacks=value[event]; break end
+    end
+    if not callbacks then return end
+    local selected={}
+    for fn in pairs(callbacks) do
+        if type(fn)=="function" then
+            local info=debug.getinfo(fn,"S")
+            local module=info and info.source and info.source:match("([^/\\]+)%.script$")
+            module=module and module:gsub("^@", "")
+            if allowed[module] then selected[#selected+1]=fn end
+        end
+    end
+    for _,fn in ipairs(selected) do fn(nil,delta) end
+end
+-- Called only by the isolated native quest/reward test fixture.
+function probe_reward()
+    db.actor:give_money(500)
+    alife_create_item("bandage",db.actor)
+    db.actor:set_character_reputation(db.actor:character_reputation()+50)
+    db.actor:set_character_rank(db.actor:character_rank()+60)
+    relation_registry.change_community_goodwill("stalker",db.actor:id(),70)
+    return true
+end
+function update(first,delta)
+    if first then
+        run_presentation("actor_on_first_update",delta)
+        -- Loading a canonical save never runs the normal actor first-update path.
+        if not actor_status.HUD then actor_status.prepare_boosters_effect(); actor_status.activate_hud() end
+    end
+    run_presentation("actor_on_update",delta)
+end
+
+function probe_hud() return actor_status.HUD ~= nil end
+

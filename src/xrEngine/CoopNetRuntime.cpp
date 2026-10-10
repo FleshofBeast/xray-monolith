@@ -21,6 +21,8 @@ void coopnet_log(const char* format, ...) {
 #include "../CoopNet/EngineWorldBridge.h"
 #include "../CoopNet/EntityRegistry.h"
 #include "../CoopNet/GuestSave.h"
+#include "../CoopNet/QuestRewards.h"
+#include "../CoopNet/CharacterSave.h"
 #include "../CoopNet/JoinProfile.h"
 #include "../CoopNet/LootRetries.h"
 #ifndef NOMINMAX
@@ -117,6 +119,11 @@ struct Session {
     coopnet::QuestState shared_quests;
     std::uint32_t shared_quest_level=0;
     bool shared_quests_pending=false;
+    std::vector<coopnet::RadioRecord> shared_radio;
+    std::uint32_t shared_radio_level=0;
+    bool shared_radio_pending=false;
+    struct Award {SharedQuestReward reward; coopnet::Identity character=0; bool journaled=false;};
+    std::deque<Award> awards;
     bool shared_probe=false;
     unsigned shared_probe_phase=0;
     double shared_probe_wait=0;
@@ -195,7 +202,9 @@ struct Session {
     coopnet::Identity host_character=0;
     std::string endpoint;
     double reconnect_wait=0,reconnect_delay=2;
-    std::uint64_t save_scope=0;
+    std::uint64_t save_scope=0,source_scope=0;
+    coopnet::InventoryView exit_character;
+    ActorConditionState exit_condition{1,1,0};
     struct SaveMeta { std::uint64_t sequence=0; coopnet::BaselineDigest digest{}; };
     std::map<coopnet::Identity,SaveMeta> guest_saves;
     std::set<coopnet::Identity> loaded_guest_saves;
@@ -283,6 +292,36 @@ void save_guest_state(Session& current,coopnet::Identity character) {
     if (save.sequence==1) Msg("* CoopNet durable guest save written: character %llu items %u",character,
         static_cast<unsigned>(save.inventory.items.size()));
 }
+void process_quest_rewards(Session& current) {
+    SharedQuestReward reward;
+    while(take_shared_quest_reward(reward)) for(auto character:reward.characters) current.awards.push_back({reward,character,false});
+    std::set<std::uint64_t> processing;
+    for(auto it=current.awards.begin();it!=current.awards.end();) {
+        if(!processing.insert(it->character).second) {++it;continue;}
+        std::uint16_t object=0xffff;
+        for(const auto& player:current.host.session().players()) if(player.character==it->character && player.connected) {
+            const auto guest=current.guests.find(player.id); if(guest!=current.guests.end()) object=guest->second.object;
+        }
+        if(!it->journaled) {
+            load_guest_save(current,it->character);
+            GuestInventoryState state;
+            if(object!=0xffff && capture_guest_inventory(object,state)) {
+                state.rewards=current.guest_inventory[it->character].rewards;
+            } else {
+                const auto saved=current.guest_inventory.find(it->character);
+                if(saved==current.guest_inventory.end()) {++it;continue;} state=saved->second;
+            }
+            const auto result=journal_quest_reward(state,it->reward);
+            if(result==RewardJournalResult::Full) {++it;continue;}
+            if(result==RewardJournalResult::Invalid) throw std::runtime_error("Invalid authoritative quest reward");
+            if(result==RewardJournalResult::AlreadyApplied) {it=current.awards.erase(it);continue;}
+            current.guest_inventory[it->character]=std::move(state); save_guest_state(current,it->character); it->journaled=true;
+            Msg("* CoopNet shared quest reward journaled: character %llu quest %s id %llu",it->character,it->reward.quest.c_str(),it->reward.id);
+        }
+        if(object==0xffff || grant_shared_quest_reward(object,it->reward,current.guest_inventory[it->character])) it=current.awards.erase(it);
+        else ++it;
+    }
+}
 void party_status(Session& current,coopnet::PartyStage stage,unsigned present,unsigned required,std::uint32_t destination) {
     const auto& previous=current.party_status;
     if (previous.stage==stage && previous.present==present && previous.required==required && previous.destination==destination) return;
@@ -340,7 +379,7 @@ void update_party(Session& current,double elapsed) {
         GuestInventoryState inventory;
         if (!capture_guest_inventory(guest->second.object,inventory))
             throw std::runtime_error("Guest inventory capture before travel failed");
-        current.guest_inventory[player.character]=std::move(inventory);
+        inventory.rewards=current.guest_inventory[player.character].rewards; current.guest_inventory[player.character]=std::move(inventory);
         ActorConditionState condition;
         if (capture_actor_condition(guest->second.object,condition)) current.guest_conditions[player.character]=condition;
         save_guest_state(current,player.character);
@@ -418,6 +457,11 @@ void publish_shared_world(Session& current,double elapsed) {
     if (npc_signature!=current.shared_signature[0] && current.host.publish_shared_world(coopnet::SharedKind::NPC,level,current.shared_revision[0]+1,coopnet::encode_npcs(records))) {
         current.shared_signature[0]=npc_signature; ++current.shared_revision[0];
         Msg("* CoopNet host NPC catalogue: objects %u revision %u",static_cast<unsigned>(records.size()),current.shared_revision[0]);
+    }
+    std::vector<coopnet::RadioRecord> radio;
+    if(capture_radio_history(level,radio)) {
+        const auto bytes=coopnet::encode_radio(radio);
+        if(bytes!=current.shared_signature[3] && current.host.publish_shared_world(coopnet::SharedKind::Radio,level,current.shared_revision[3]+1,bytes)) {current.shared_signature[3]=bytes; ++current.shared_revision[3];}
     }
     coopnet::QuestState quests;
     std::vector<coopnet::ContainerRecord> containers;
@@ -599,7 +643,7 @@ void capture_host(Session& current, double elapsed) {
     }
     if (!available) return;
     if (!current.save_scope) {
-        current.save_scope=guest_save_scope();
+        current.source_scope=guest_save_scope();current.save_scope=current.source_scope;
         for (auto value:{current.build.game,current.build.mods,current.host_character})
             for (unsigned byte=0;byte<8;++byte) { current.save_scope^=(value>>(8*byte))&255; current.save_scope*=1099511628211ull; }
         if (!current.save_scope) current.save_scope=1;
@@ -744,7 +788,7 @@ void capture_guests(Session& current) {
             if (available) for (const auto& player:current.host.session().players()) if (player.id==it->first) {
                 ActorConditionState condition; GuestInventoryState inventory;
                 if (capture_actor_condition(guest.object,condition) && capture_guest_inventory(guest.object,inventory)) {
-                    current.guest_conditions[player.character]=condition; current.guest_inventory[player.character]=std::move(inventory);
+                    current.guest_conditions[player.character]=condition; inventory.rewards=current.guest_inventory[player.character].rewards; current.guest_inventory[player.character]=std::move(inventory);
                     save_guest_state(current,player.character);
                 }
             }
@@ -903,6 +947,7 @@ void capture_guests(Session& current) {
                 view.revision=guest.inventory_revision+1;
                 view.money=guest_money(guest.object);
                 view.community=actor_community(guest.object);
+                capture_player_progress(guest.object,view.progress);
                 exercise_guest_faction_probe(guest.object,10./25.);
                 capture_guest_disposition(current.host.identity(),guest.object,view);
                 for (const auto& native:native_items) {
@@ -942,7 +987,7 @@ void capture_guests(Session& current) {
                 if (current.tick%25==0) {
                     GuestInventoryState inventory;
                     if (capture_guest_inventory(guest.object,inventory)) {
-                        current.guest_inventory[player.character]=std::move(inventory);
+                        inventory.rewards=current.guest_inventory[player.character].rewards; current.guest_inventory[player.character]=std::move(inventory);
                         save_guest_state(current,player.character);
                     }
                 }
@@ -1069,6 +1114,7 @@ void update_player_nameplates(Session& current,double elapsed) {
     set_player_nameplates(labels);
 }
 void update_join_news(Session& current) {
+    if(current.mode!=coopnet::Mode::Host) return; // Guest radio comes from the ordered host stream.
     LocalActorPose local; if (!capture_local_actor(local)) return;
     const auto identity=current.mode==coopnet::Mode::Host ? current.host.identity() : current.client.session().welcome().session;
     if (!identity) return;
@@ -1097,13 +1143,25 @@ void update_join_news(Session& current) {
 void stop() {
     set_player_nameplates({});
     if (session) {
+        try {
+            coopnet::InventoryView character; LocalActorPose local; ActorConditionState condition;
+            bool ready=(session->mode==coopnet::Mode::Host || world_level_is_replica()) && capture_local_actor(local) && capture_owned_character(character) && capture_actor_condition(local.object,condition);
+            if(!ready && session->mode==coopnet::Mode::Client && session->exit_character.actor) {character=session->exit_character;condition=session->exit_condition;ready=true;}
+            if(ready) {
+                capture_player_name(session->local_player_name);
+                if(!write_character_save(session->host_character,session->local_player_name,character,condition))
+                    Msg("! CoopNet character exit save failed; previous save retained");
+                if(session->mode==coopnet::Mode::Host && !save_host_character_world(session->local_player_name))
+                    Msg("! CoopNet host world exit save failed; previous save retained");
+            }
+        } catch(const std::exception& error) {Msg("! CoopNet character exit save failed: %s",error.what());}
         if (session->mode==coopnet::Mode::Host) for (const auto& player:session->host.session().players()) {
             const auto guest=session->guests.find(player.id);
             if (guest==session->guests.end()) continue;
             try {
                 ActorConditionState condition; GuestInventoryState inventory;
                 if (capture_actor_condition(guest->second.object,condition) && capture_guest_inventory(guest->second.object,inventory)) {
-                    session->guest_conditions[player.character]=condition; session->guest_inventory[player.character]=std::move(inventory);
+                    session->guest_conditions[player.character]=condition; inventory.rewards=session->guest_inventory[player.character].rewards; session->guest_inventory[player.character]=std::move(inventory);
                     save_guest_state(*session,player.character);
                 }
             } catch (const std::exception& error) { Msg("! CoopNet guest shutdown save failed: %s",error.what()); }
@@ -1172,6 +1230,8 @@ void update(double) {
             publish_world_settings(*session,elapsed);
             capture_world_loot(*session);
             send_world_baselines(*session);
+            exercise_guest_features_probe(elapsed);
+            process_quest_rewards(*session);
             capture_guests(*session);
             if (session->shared_probe && !session->guests.empty()) {
                 const auto& guest=session->guests.begin()->second;
@@ -1279,6 +1339,9 @@ void update(double) {
             update_world_items();
             update_npc_catalogue();
             update_container_catalogue();
+            update_guest_ui(elapsed);
+            exercise_guest_features_probe(elapsed);
+            if(session->shared_radio_pending && apply_radio_history(session->client.session().welcome().session,session->shared_radio_level,session->shared_radio)) session->shared_radio_pending=false;
             if (session->shared_quests_pending && apply_shared_quests(session->client.session().welcome().session,session->shared_quest_level,session->shared_quests)) session->shared_quests_pending=false;
             if (session->settings_probe) exercise_world_settings_probe();
             if (session->loot_probe) exercise_local_world_loot_probe();
@@ -1479,6 +1542,7 @@ void command(const char* name, const char* arguments) {
                 }
                 load_guest_save(*owner,character.actor);
                 const auto saved=owner->guest_inventory.find(character.actor);
+                if(saved!=owner->guest_inventory.end() && !saved->second.progress.present && character.progress.present) saved->second.progress=character.progress;
                 if (saved!=owner->guest_inventory.end() && !saved->second.community.empty() && !faction_matches_host(saved->second.community)) {
                     Msg("! CoopNet join rejected: saved character faction must match the host faction"); return false;
                 }
@@ -1525,12 +1589,12 @@ void command(const char* name, const char* arguments) {
             next->build=build;
             next->client.start(std::make_unique<coopnet::GnsTransport>(next->runtime, connection), character, build,saved,next->local_player_name);
             coopnet::InventoryView selected_character;
-            if (capture_join_character(selected_character)) {
+            if (read_character_save(character,selected_character) || capture_join_character(selected_character)) {
                 selected_character.actor=character; next->client.set_character_profile(selected_character);
                 Msg("* CoopNet joining with loaded character: items %u rubles %u",static_cast<unsigned>(selected_character.items.size()),selected_character.money);
             }
             auto* owner = next.get();
-            next->client.set_inventory_view_sink([](const coopnet::InventoryView& view) { queue_local_inventory_view(view); });
+            next->client.set_inventory_view_sink([owner](const coopnet::InventoryView& view) { owner->exit_character=view;owner->exit_character.npc_disposition.clear();queue_local_inventory_view(view); });
             next->client.set_world_rules_sink([](std::uint32_t revision,const std::vector<coopnet::WorldRule>& rules) { queue_host_world_rules(revision,rules); });
             next->client.set_world_clock_sink([owner](const coopnet::WorldClock& clock) {
                 if (apply_host_world_clock(clock) && ++owner->host_clock_updates==1)
@@ -1573,6 +1637,7 @@ void command(const char* name, const char* arguments) {
             next->client.set_vitals_sink([owner](const coopnet::ActorVitals& vitals) {
                 owner->player_vitals[vitals.actor]=vitals;
                 const auto* actor=owner->client.actors().find(vitals.actor);
+                if(actor && actor->player==owner->client.session().welcome().player) owner->exit_condition={vitals.health,vitals.power,vitals.radiation};
                 if (actor && actor->player==owner->client.session().welcome().player &&
                     apply_local_condition(vitals.level,{vitals.health,vitals.power,vitals.radiation})) {
                     ++owner->condition_corrections;
@@ -1595,6 +1660,8 @@ void command(const char* name, const char* arguments) {
                     std::vector<coopnet::NPCRecord> records; if (coopnet::decode_npcs(bytes,records)) queue_npc_catalogue(owner->client.session().welcome().session,level,records);
                 } else if (kind==coopnet::SharedKind::Quests) {
                     if (coopnet::decode_quests(bytes,owner->shared_quests)) { owner->shared_quest_level=level; owner->shared_quests_pending=true; }
+                } else if(kind==coopnet::SharedKind::Radio) {
+                    if(coopnet::decode_radio(bytes,owner->shared_radio)) {owner->shared_radio_level=level; owner->shared_radio_pending=true;}
                 } else {
                     std::vector<coopnet::ContainerRecord> records; if (coopnet::decode_containers(bytes,records)) queue_container_catalogue(owner->client.session().welcome().session,level,records);
                 }
@@ -1754,6 +1821,15 @@ void join_status(char* output,unsigned capacity) {
     }
     snprintf(output,capacity,"%s",status);
 }
+unsigned long long host_save_source_scope() {return session && session->mode==coopnet::Mode::Host ? session->source_scope : 0;}
+unsigned long long guest_character_identity(unsigned short object) {
+    if(!session || session->mode!=coopnet::Mode::Host) return 0;
+    for(const auto& player:session->host.session().players()) if(player.id!=1 && player.connected) {
+        const auto guest=session->guests.find(player.id);
+        if(guest!=session->guests.end() && guest->second.object==object && session->host.participant_ready(player.id)) return player.character;
+    }
+    return 0;
+}
 bool take_version_mismatch(char* output,unsigned capacity) {
     if(!output || !capacity || version_mismatch_notice.empty()) return false;
     snprintf(output,capacity,"%s",version_mismatch_notice.c_str()); version_mismatch_notice.clear(); return true;
@@ -1765,6 +1841,8 @@ void update(double) {}
 void stop() {}
 bool available() { return false; }
 bool take_version_mismatch(char*,unsigned) { return false; }
+unsigned long long host_save_source_scope() {return 0;}
+unsigned long long guest_character_identity(unsigned short) {return 0;}
 bool guest_settings_locked() { return false; }
 bool world_setting_command(const char*) { return false; }
 void register_world_setting_command(const char*) {}

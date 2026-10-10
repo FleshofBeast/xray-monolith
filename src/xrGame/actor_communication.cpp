@@ -37,6 +37,7 @@ void CActor::AddGameNews(GAME_NEWS_DATA& news_data)
 	GAME_NEWS_VECTOR& news_vector = game_news_registry->registry().objects();
 	news_data.receive_time = Level().GetGameTime();
 	news_vector.push_back(news_data);
+    engine_coopnet::capture_radio_news(news_data);
 
 	if (CurrentGameUI())
 	{
