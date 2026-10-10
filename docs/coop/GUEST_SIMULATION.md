@@ -37,14 +37,19 @@ implementation for X-Ray's animation, physics, Lua or ALife systems.
   upvalue table. Previously, the copied function could call `ipairs(nil)` when
   evaluating ordinary NPC enemies.
 - Applying a host NPC pose explicitly enables its native visibility.
+- Protocol 30 also carries baseline anomaly state and time within that state.
+  Guests run a dedicated effects update for native idle lights, awakening and
+  accumulation particles, blowout particles/sound/light/wind, grass effects and
+  camera effects. They do not run anomaly activation, damage, artifact creation
+  or Lua callbacks. Anomalies are excluded from the NPC spawn catalogue.
 
 ## Remaining integration work
 
 These changes do not establish complete world simulation. Base-channel skeletal
 cycles do not include all attack sounds, particles, additive animations or AI
-action events. Guest anomaly updates are still suppressed by the generic replica
-path. They need host state/action replication and local effects playback, without
-duplicate damage, artifact creation or quest callbacks.
+action events. Dynamically creating/removing anomalies and object-attached entrance
+and hit particles still need separate event replication; the current anomaly
+effects path targets zones present in the canonical world snapshot.
 
 Validation must include a guest bullet actually damaging a host NPC, a native
 electric anomaly damaging a guest without crashing either client, visible

@@ -2,6 +2,32 @@
 
 Current user-selected goal: one host simulates the shared world, and all connected players travel between locations together. The active architecture has no location workers or independently active guest locations. Guest HUD/radio/task mirroring, host-completion shared rewards and portable exit saves are implemented at the latest checkpoint below. Full scripted story/guest turn-in coverage and ordinary gameplay edge cases remain experimental.
 
+## Guest anomaly effects — 2026-10-10
+
+Protocol 30 adds host anomaly state/phase snapshots and a dedicated guest native
+effects update. Baseline zones play particles, sound, lights, wind, grass and
+camera effects locally without running activation, damage, artifact generation
+or script callbacks. Separate bounded anomaly sequence tracking prevents the NPC
+catalogue from filtering out anomaly updates or resetting duplicate protection.
+State changes publish immediately; active phase refreshes and idle heartbeats
+avoid transmitting every inactive anomaly on every tick.
+
+All 20 standalone suites passed (`_build/anomaly-effects-unit2.log`), including
+anomaly codec bounds and reception/replay/incarnation checks across NPC catalogue
+refreshes. DX11 build3 and the 150-second isolated native SharedWorld run passed
+(`_build/anomaly-effects-build3.log`, `_build/anomaly-effects-native3.log`). The
+host activated `zone_mine_electric_weak`; the guest received awakening, blowout,
+accumulation and idle states and created `anomaly2\\electra2_blast` through the
+native particle system. Movement recorded 3,000 camera samples with zero
+discontinuities; NPC spawn/death/removal, quest state, canonical snapshot loading,
+ordinary gameplay fixture and unchanged source-save checks passed.
+
+The first native run caught the NPC-catalogue receiver filter; the second confirmed
+electric effects but failed movement continuity with every idle zone transmitted
+each tick. The reduced update stream passed the final run. Actual electric-anomaly
+damage, object-attached entrance/hit effects, dynamic anomaly creation/removal and
+manual visual inspection are not established by this fixture.
+
 ## Shared-world checkpoint — 2026-10-09
 
 CoopNet now adapts the native multiplayer actor physics correction/prediction and interpolation machinery instead of sending guest-owned movement poses. Protocol 21 carries the input sequence actually simulated by the host; a bounded input timing history estimates the correction interval. Guest native physics stays authoritative to host snapshots while interpolation smooths its camera target without overwriting live controls or mouse aim. Shared-world movement, respawn and native weapon fixtures passed; manually controlled smoothness across frame rates and internet latency still needs verification. Full weapon/gear/shot presentation, quest acceptance/turn-in and durable shared rewards remain unfinished.

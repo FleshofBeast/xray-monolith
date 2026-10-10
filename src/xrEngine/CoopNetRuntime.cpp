@@ -184,6 +184,8 @@ struct Session {
     std::string world_save;
     std::map<coopnet::Identity,std::pair<std::uint32_t,std::uint64_t>> world_sent;
     std::uint32_t world_tick=0;
+    std::uint32_t zone_level=0;
+    std::map<std::uint16_t,std::pair<std::uint64_t,std::uint8_t>> zone_states;
     unsigned world_updates=0;
     bool party_loading=false, party_authorized=false;
     double party_elapsed=0;
@@ -431,11 +433,22 @@ void publish_world(Session& current) {
     current.world_tick=current.tick;
     std::uint32_t level=0; std::vector<NativeWorldPose> objects;
     if (!capture_world_objects(level,objects)) return;
+    if (current.zone_level!=level) { current.zone_states.clear(); current.zone_level=level; }
     coopnet::WorldState state; state.level=level; state.tick=current.tick;
     for (const auto& native:objects) {
+        if (native.zone_state!=255) {
+            const auto value=std::make_pair(native.incarnation,native.zone_state);
+            const auto previous=current.zone_states.find(native.object);
+            const bool changed=previous==current.zone_states.end() || previous->second!=value;
+            const bool active=native.zone_state==1 || native.zone_state==2 || native.zone_state==3;
+            // Changes are immediate; local effects advance phase between refreshes.
+            if (!changed && current.tick%30 && (!active || current.tick%6)) continue;
+            current.zone_states[native.object]=value;
+        }
         coopnet::WorldPose pose; pose.anchor=coopnet::world_anchor(current.host.identity(),native.object);
         pose.incarnation=native.incarnation; pose.health=native.health;
         pose.animations=native.animations;
+        pose.zone_state=native.zone_state; pose.zone_time=native.zone_time;
         for (unsigned axis=0;axis<3;++axis) { pose.position[axis]=native.position[axis]; pose.rotation[axis]=native.rotation[axis]; }
         state.objects.push_back(pose);
         if (state.objects.size()==128) { current.host.publish_world_state(state); state.objects.clear(); }
@@ -451,6 +464,7 @@ void publish_shared_world(Session& current,double elapsed) {
     if (level!=current.shared_level) { current.shared_signature={}; current.shared_level=level; }
     std::vector<coopnet::NPCRecord> records,signature;
     for (const auto& native:objects) {
+        if (native.zone_state!=255) continue;
         coopnet::NPCRecord n; n.section=native.section; n.visual=native.visual;
         n.pose.anchor=coopnet::world_anchor(current.host.identity(),native.object); n.pose.incarnation=native.incarnation; n.pose.health=native.health;
         for (unsigned axis=0;axis<3;++axis) { n.pose.position[axis]=native.position[axis]; n.pose.rotation[axis]=native.rotation[axis]; }
@@ -1696,7 +1710,7 @@ void command(const char* name, const char* arguments) {
                 unsigned applied=0;
                 for (const auto& object:state.objects)
                     if (apply_world_object(owner->client.session().welcome().session,object.anchor,object.incarnation,
-                        object.position.data(),object.rotation.data(),object.health,object.animations)) ++applied;
+                        object.position.data(),object.rotation.data(),object.health,object.animations,object.zone_state,object.zone_time)) ++applied;
                 owner->world_updates+=applied;
                 if (applied && owner->world_updates==applied)
                     Msg("* CoopNet authoritative NPC states applied: objects %u level %u",applied,state.level);

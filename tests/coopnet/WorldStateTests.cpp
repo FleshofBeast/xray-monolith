@@ -17,6 +17,13 @@ int main() {
     auto invalid=state; invalid.objects.push_back(invalid.objects.front()); require(!valid_world_state(invalid));
     invalid=state; invalid.objects.front().health=std::numeric_limits<float>::quiet_NaN(); require(!valid_world_state(invalid));
     invalid=state; invalid.objects.resize(129); require(!valid_world_state(invalid));
+    auto zone=state; zone.objects.front().zone_state=2; zone.objects.front().zone_time=750;
+    encoded=encode_world_state(zone); require(decode_world_state(encoded,decoded));
+    require(decoded.objects.front().zone_state==2 && decoded.objects.front().zone_time==750);
+    invalid=zone; invalid.objects.front().zone_state=5; require(!valid_world_state(invalid));
+    invalid=zone; invalid.objects.front().zone_state=255; require(!valid_world_state(invalid));
+    invalid=zone; invalid.objects.front().zone_time=0xffffffff; require(!valid_world_state(invalid));
+    invalid=zone; invalid.objects.front().animations.push_back({}); require(!valid_world_state(invalid));
     auto animated=state; animated.objects.front().animations={{0,2,17,.5f,1.25f,false},{3,0,41,2.f,.75f,true}};
     encoded=encode_world_state(animated);
     require(decode_world_state(encoded,decoded));
@@ -56,6 +63,15 @@ int main() {
     state.tick=2; require(host.publish_world_state(state)); pump(); require(applied==2);
     state.tick=3; state.objects.front().incarnation=8; require(host.publish_world_state(state)); pump(); require(applied==2);
     state.level=11; state.objects.front().incarnation=7; require(host.publish_world_state(state)); pump(); require(applied==2);
+    NPCRecord npc; npc.section="dog_weak"; npc.pose=state.objects.front();
+    require(host.publish_shared_world(SharedKind::NPC,10,1,encode_npcs({npc}))); for (unsigned n=0;n<10;++n) pump();
+    zone.tick=4; zone.objects.front().anchor=world_anchor(123,44);
+    require(host.publish_world_state(zone)); pump(); require(applied==3);
+    require(host.publish_world_state(zone)); pump(); require(applied==3);
+    require(host.publish_shared_world(SharedKind::NPC,10,2,encode_npcs({npc}))); for (unsigned n=0;n<10;++n) pump();
+    require(host.publish_world_state(zone)); pump(); require(applied==3);
+    zone.tick=5; zone.objects.front().incarnation=8; require(host.publish_world_state(zone)); pump(); require(applied==3);
+    zone.objects.front().incarnation=7; require(host.publish_world_state(zone)); pump(); require(applied==4);
     client.stop(); host.stop();
     std::cout<<"CoopNet NPC codec, anchor uniqueness, loading barrier, level isolation, duplicate and incarnation rejection passed\n";
 }

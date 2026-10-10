@@ -44,6 +44,8 @@ struct NativeWorldPose {
     float position[3]{},rotation[3]{},health=0;
     std::string section,visual;
     std::vector<coopnet::WorldAnimation> animations;
+    std::uint8_t zone_state=255;
+    std::uint32_t zone_time=0;
 };
 void queue_npc_catalogue(std::uint64_t session,std::uint32_t level,const std::vector<coopnet::NPCRecord>& records);
 void update_npc_catalogue();
@@ -76,7 +78,8 @@ bool apply_shared_quests(std::uint64_t session,std::uint32_t level,const coopnet
 void exercise_shared_world_probe(double elapsed,unsigned& phase,double& wait,std::uint16_t& object);
 bool capture_world_objects(std::uint32_t& level,std::vector<NativeWorldPose>& objects);
 bool apply_world_object(std::uint64_t session,std::uint64_t anchor,std::uint64_t incarnation,
-    const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations={});
+    const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations={},
+    std::uint8_t zone_state=255,std::uint32_t zone_time=0);
 bool world_level_is_replica();
 void world_object_spawned(CGameObject* object,const CSE_Abstract* source);
 void world_object_destroyed(CGameObject* object);

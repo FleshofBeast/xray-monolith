@@ -211,6 +211,14 @@ if ($WorldLootProbe) {
     Write-Output 'NATIVE_WORLD_LOOT_PASS: client presentation pickup removed ALife ownership, drop restored persistent world ownership, and a second pickup transferred the same item back to the guest.'
 }
 if ($SharedWorldProbe) {
+    $electric=[regex]::Match($logs.host,'CoopNet anomaly probe: host electric activation section (\S+)')
+    if (!$electric.Success) { throw 'Native electric anomaly fixture missing.' }
+    $electricSection=[regex]::Escape($electric.Groups[1].Value)
+    if ($logs.guest -notmatch "CoopNet anomaly effects: section $electricSection state 2" -or
+        $logs.guest -notmatch "CoopNet anomaly particles played: section $electricSection effect \S+") {
+        throw 'Guest did not reproduce host electric anomaly blowout and native particles.'
+    }
+    Write-Output 'NATIVE_ANOMALY_EFFECTS_PASS: host electric activation replicated and guest native blowout particles played.'
     if ($logs.guest -notmatch 'CoopNet trader probe: baseline trader removed section' -or
         $logs.guest -notmatch 'CoopNet NPC spawned: section \S+ anchor \d+ trader 1 visible 1') {
         throw 'Native stationary trader did not spawn visibly on the guest.'

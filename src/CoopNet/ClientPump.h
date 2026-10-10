@@ -42,6 +42,7 @@ class ClientPump {
     std::function<void(const PartyStatus&)> party_sink_;
     std::function<void(const WorldState&)> world_sink_;
     std::map<Identity,std::pair<Identity,SequenceWindow>> world_sequences_;
+    std::map<Identity,std::pair<Identity,SequenceWindow>> zone_sequences_;
     std::array<SharedAssembly,shared_kind_count> shared_assembly_;
     std::array<std::uint32_t,shared_kind_count> shared_revision_{};
     std::function<void(SharedKind,std::uint32_t,const std::vector<std::uint8_t>&)> shared_sink_;
@@ -83,7 +84,7 @@ class ClientPump {
         pending_dialogue_.clear(); dialogue_assembly_.clear();
         pending_respawns_.clear(); respawn_ticks_.clear();
         inventory_view_assembly_.clear(); inventory_views_={}; inventory_view_revision_=0;
-        world_sequences_.clear();
+        world_sequences_.clear(); zone_sequences_.clear();
         shared_assembly_={}; shared_revision_={};
         baseline_assembly_.clear(); baseline_={}; baseline_validated_=false; baseline_acknowledged_=false; baseline_time_=0;
     }
@@ -381,11 +382,12 @@ public:
                 if (!baseline_acknowledged_ || !level_ready_sent_ || state.level!=assignment_.level) continue;
                 WorldState accepted; accepted.level=state.level; accepted.tick=state.tick;
                 for (const auto& object:state.objects) {
-                    auto found=world_sequences_.find(object.anchor);
-                    if (found==world_sequences_.end()) {
-                        if (shared_revision_[0]) continue;
-                        if (world_sequences_.size()>=4096) continue;
-                        found=world_sequences_.emplace(object.anchor,std::make_pair(object.incarnation,SequenceWindow{})).first;
+                    auto& sequences=object.zone_state!=255 ? zone_sequences_ : world_sequences_;
+                    auto found=sequences.find(object.anchor);
+                    if (found==sequences.end()) {
+                        if (object.zone_state==255 && shared_revision_[0]) continue;
+                        if (sequences.size()>=4096) continue;
+                        found=sequences.emplace(object.anchor,std::make_pair(object.incarnation,SequenceWindow{})).first;
                     }
                     // A replacement requires a new canonical native binding, never an arbitrary pose.
                     if (found->second.first!=object.incarnation || !found->second.second.accept(state.tick)) continue;

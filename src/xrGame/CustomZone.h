@@ -213,6 +213,9 @@ public:
 	void ChangeIdleParticles(LPCSTR name, bool bIdleLight);
 	void MoveScript(Fvector pos);
 	EZoneState ZoneState() { return m_eZoneState; }
+	u32 CoopStateTime() const { return static_cast<u32>((std::max)(0,m_iStateTime)); }
+	void CoopApplyState(u8 state,u32 elapsed);
+	void CoopUpdateEffects(u32 dt);
 protected:
 
 

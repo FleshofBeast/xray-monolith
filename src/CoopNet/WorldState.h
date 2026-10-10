@@ -24,6 +24,8 @@ struct WorldPose {
     std::array<float,3> position{}, rotation{};
     float health=0;
     std::vector<WorldAnimation> animations;
+    std::uint8_t zone_state=255;
+    std::uint32_t zone_time=0;
 };
 struct WorldState {
     std::uint32_t level=0, tick=0;
@@ -38,6 +40,8 @@ inline bool valid_world_state(const WorldState& state) {
         for (const auto& vector:{object.position,object.rotation})
             for (const auto value:vector) if (!std::isfinite(value) || std::abs(value)>1000000) return false;
         if (object.animations.size()>4) return false;
+        if ((object.zone_state!=255 && object.zone_state>4) || object.zone_time>0x7fffffff ||
+            (object.zone_state==255 && object.zone_time) || (object.zone_state!=255 && !object.animations.empty())) return false;
         std::set<unsigned> parts;
         for (const auto& animation:object.animations) if (!valid_world_animation(animation) || !parts.insert(animation.part).second) return false;
     }
@@ -52,6 +56,7 @@ inline std::vector<std::uint8_t> encode_world_state(const WorldState& state) {
             std::uint32_t bits; std::memcpy(&bits,&value,4); writer.integer(bits,4);
         }
         std::uint32_t bits; std::memcpy(&bits,&object.health,4); writer.integer(bits,4);
+        writer.integer(object.zone_state,1); writer.integer(object.zone_time,4);
         writer.integer(object.animations.size(),1);
         for (const auto& a:object.animations) {
             writer.integer(a.part,1); writer.integer(a.slot,2); writer.integer(a.motion,2);
@@ -63,7 +68,7 @@ inline std::vector<std::uint8_t> encode_world_state(const WorldState& state) {
 inline bool decode_world_state(const std::vector<std::uint8_t>& bytes,WorldState& output) {
     Reader reader(bytes); std::uint64_t level,tick,count;
     if (!reader.integer(level,4) || !reader.integer(tick,4) || !reader.integer(count,2) || !count || count>128 ||
-        reader.remaining()<count*45) return false;
+        reader.remaining()<count*50) return false;
     WorldState state; state.level=static_cast<std::uint32_t>(level); state.tick=static_cast<std::uint32_t>(tick);
     state.objects.resize(static_cast<std::size_t>(count));
     for (auto& object:state.objects) {
@@ -74,6 +79,9 @@ inline bool decode_world_state(const std::vector<std::uint8_t>& bytes,WorldState
         }
         std::uint64_t bits; if (!reader.integer(bits,4)) return false;
         const auto number=static_cast<std::uint32_t>(bits); std::memcpy(&object.health,&number,4);
+        std::uint64_t zone,state_time;
+        if (!reader.integer(zone,1) || !reader.integer(state_time,4)) return false;
+        object.zone_state=static_cast<std::uint8_t>(zone); object.zone_time=static_cast<std::uint32_t>(state_time);
         std::uint64_t animations; if (!reader.integer(animations,1) || animations>4) return false;
         for (unsigned i=0;i<animations;++i) {
             WorldAnimation a; std::uint64_t part,slot,motion,stop;

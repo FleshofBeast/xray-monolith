@@ -33,6 +33,7 @@
 #include "../CoopNet/GuestSave.h"
 #include "../CoopNet/CharacterSave.h"
 #include "entity_alive.h"
+#include "CustomZone.h"
 #include "ai/trader/ai_trader.h"
 #include "ai/stalker/ai_stalker.h"
 #include "memory_manager.h"
@@ -670,12 +671,15 @@ bool capture_world_objects(std::uint32_t& level,std::vector<NativeWorldPose>& ob
     for (const auto& record:world_objects) {
         auto* object=const_cast<CGameObject*>(record.first);
         auto* entity=smart_cast<CEntityAlive*>(object);
-        if (!entity || object->cast_actor() || object->getDestroy()) continue;
+        auto* zone=smart_cast<CCustomZone*>(object);
+        if ((!entity && !zone) || object->cast_actor() || object->getDestroy()) continue;
         NativeWorldPose pose; pose.object=object->ID(); pose.incarnation=record.second.incarnation;
         pose.section=object->cNameSect().c_str(); if (object->cNameVisual().size()) pose.visual=object->cNameVisual().c_str();
         for (unsigned axis=0;axis<3;++axis) pose.position[axis]=object->Position()[axis];
         object->XFORM().getHPB(pose.rotation[0],pose.rotation[1],pose.rotation[2]);
-        pose.health=entity->GetfHealth(); clamp(pose.health,-1.f,1.f); objects.push_back(pose);
+        if (zone) { pose.zone_state=static_cast<std::uint8_t>(zone->ZoneState()); pose.zone_time=zone->CoopStateTime(); }
+        if (entity) pose.health=entity->GetfHealth(); clamp(pose.health,-1.f,1.f); objects.push_back(pose);
+        if (zone) continue;
         if (object->Visual()) if (auto* animated=object->Visual()->dcast_PKinematicsAnimated()) {
             for (unsigned part=0;part<4;++part) {
                 if (!animated->LL_MotionsSlotCount()) break;
@@ -710,12 +714,19 @@ void capture_guest_disposition(std::uint64_t session,std::uint16_t object,coopne
     }
 }
 bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint64_t incarnation,
-    const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations) {
+    const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations,
+    std::uint8_t zone_state,std::uint32_t zone_time) {
     if (!world_level_is_replica() || !g_pGameLevel->bReady) return false;
     for (auto& record:world_objects) {
         auto* object=const_cast<CGameObject*>(record.first);
         if (!record.second.replica || object->getDestroy() || (record.second.anchor ? record.second.anchor : coopnet::world_anchor(session_id,object->ID()))!=anchor) continue;
         auto* entity=smart_cast<CEntityAlive*>(object);
+        if (zone_state!=255) {
+            auto* zone=smart_cast<CCustomZone*>(object);
+            if (!zone || zone_state>=CCustomZone::eZoneStateMax || (record.second.authority && record.second.authority!=incarnation)) return false;
+            record.second.authority=incarnation; record.second.anchor=anchor;
+            zone->CoopApplyState(zone_state,zone_time); return true;
+        }
         if (!entity || object->cast_actor() || (record.second.authority && record.second.authority!=incarnation)) return false;
         if (record.second.dead && health>0) return false;
         record.second.authority=incarnation; record.second.anchor=anchor;
@@ -1416,6 +1427,14 @@ void exercise_shared_world_probe(double elapsed,unsigned& phase,double& wait,std
     wait+=elapsed; if (wait<(phase ? 8. : 5.)) return;
     auto& manager=Level().GameTaskManager();
     if (!phase) {
+        for (const auto& record:world_objects) {
+            auto* zone=smart_cast<CCustomZone*>(const_cast<CGameObject*>(record.first));
+            if (!zone || zone->getDestroy() || zone->GetHitType()!=ALife::eHitTypeShock) continue;
+            NET_Packet activation; activation.w_u8(CCustomZone::eZoneStateAwaking);
+            zone->OnEvent(activation,GE_ZONE_STATE_CHANGE);
+            Msg("* CoopNet anomaly probe: host electric activation section %s",zone->cNameSect().c_str());
+            break;
+        }
         if (!pSettings->section_exist("dog_weak")) throw std::runtime_error("Shared probe dog section missing");
         Fvector position=g_actor->Position(); position.x+=6.f;
         const auto node=ai().level_graph().vertex(g_actor->ai_location().level_vertex_id(),position);
@@ -1484,6 +1503,10 @@ bool update_world_replica(CObject* base) {
     if (!object) return false;
     const auto found=world_objects.find(object);
     if (found==world_objects.end() || !found->second.replica) return false;
+    if (auto* zone=smart_cast<CCustomZone*>(object)) {
+        base->CObject::UpdateCL(); zone->CoopUpdateEffects(Device.dwTimeDelta);
+        ++replica_frames; return true;
+    }
     if (auto* physical=object->cast_physics_shell_holder()) {
         if (auto* support=physical->character_physics_support()) {
             if (support->movement() && support->movement()->CharacterExist()) support->movement()->DisableCharacter();

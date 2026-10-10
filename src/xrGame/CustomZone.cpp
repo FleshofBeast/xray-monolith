@@ -18,6 +18,7 @@
 #include "breakableobject.h"
 #include "GamePersistent.h"
 #include "../../script_game_object.h"
+#include "../CoopNet/EngineWorldBridge.h"
 
 #define WIND_RADIUS (4*Radius())	//расстояние до актера, когда появляется ветер 
 #define FASTMODE_DISTANCE (100.f)	//distance to camera from sphere, when zone switches to fast update sequence
@@ -883,6 +884,8 @@ void CCustomZone::PlayBlowoutParticles()
 	pParticles->Play(false);
 
 	m_fBlowoutTimeLeft = (float)Device.dwTimeGlobal + m_BendGrass_Blowout_time;
+	if (engine_coopnet::world_replica_object(this) && strstr(Core.Params,"-coop_engine_fixture"))
+		Msg("* CoopNet anomaly particles played: section %s effect %s",cNameSect().c_str(),m_sBlowoutParticles.c_str());
 }
 
 void CCustomZone::PlayHitParticles(CGameObject* pObject)
@@ -1179,6 +1182,7 @@ void CCustomZone::UpdateBlowoutLight()
 
 void CCustomZone::AffectObjects()
 {
+	if (engine_coopnet::world_replica_object(this)) return;
 	if (m_dwAffectFrameNum == Device.dwFrame)
 		return;
 
@@ -1306,6 +1310,40 @@ void CCustomZone::OnStateSwitch(EZoneState new_state)
 	m_eZoneState = new_state;
 	m_iPreviousStateTime = m_iStateTime = 0;
 };
+
+void CCustomZone::CoopApplyState(u8 state,u32 elapsed)
+{
+	if (!engine_coopnet::world_replica_object(this) || state>=eZoneStateMax || elapsed>0x7fffffff) return;
+	m_zone_flags.set(eFastMode,TRUE);
+	if (m_eZoneState!=EZoneState(state)) {
+		if (m_eZoneState==eZoneStateBlowout && m_zone_flags.test(eBlowoutDisableIdle)) PlayIdleParticles();
+		OnStateSwitch(EZoneState(state));
+		if (strstr(Core.Params,"-coop_engine_fixture"))
+			Msg("* CoopNet anomaly effects: section %s state %u",cNameSect().c_str(),unsigned(state));
+	}
+	// Catch effect thresholds crossed between snapshots, including a late join.
+	m_iPreviousStateTime=m_iStateTime;
+	m_iStateTime=(std::max)(m_iStateTime,static_cast<int>(elapsed));
+	m_zone_flags.set(eFastMode,TRUE);
+	if (m_eZoneState==eZoneStateBlowout && m_zone_flags.test(eBlowoutDisableIdle)) StopIdleParticles();
+	if (m_eZoneState==eZoneStateBlowout) UpdateBlowout();
+}
+
+void CCustomZone::CoopUpdateEffects(u32 dt)
+{
+	if (!engine_coopnet::world_replica_object(this) || !IsEnabled()) return;
+	m_iPreviousStateTime=m_iStateTime;
+	m_iStateTime=static_cast<int>((std::min)(u64(m_iStateTime)+dt,u64(0x7fffffff)));
+	m_zone_flags.set(eFastMode,TRUE);
+	UpdateIdleLight();
+	if (m_eZoneState==eZoneStateBlowout) UpdateBlowout();
+	if (m_pLight && m_pLight->get_active()) UpdateBlowoutLight();
+	if (Level().CurrentControlEntity() && m_actor_effector) {
+		Fvector position=Level().CurrentControlEntity()->Position(); position.y-=0.9f;
+		float radius=1.f; CalcDistanceTo(position,m_fDistanceToCurEntity,radius);
+		m_actor_effector->Update(m_fDistanceToCurEntity,radius,m_eHitTypeBlowout);
+	}
+}
 
 void CCustomZone::SwitchZoneState(EZoneState new_state)
 {
