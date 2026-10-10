@@ -1313,7 +1313,7 @@ void CCustomZone::OnStateSwitch(EZoneState new_state)
 
 void CCustomZone::CoopApplyState(u8 state,u32 elapsed)
 {
-	if (!engine_coopnet::world_replica_object(this) || state>=eZoneStateMax || elapsed>0x7fffffff) return;
+    if ((!engine_coopnet::world_replica_object(this) && !engine_coopnet::guest_native_world()) || state>=eZoneStateMax || elapsed>0x7fffffff) return;
 	m_zone_flags.set(eFastMode,TRUE);
 	if (m_eZoneState!=EZoneState(state)) {
 		if (m_eZoneState==eZoneStateBlowout && m_zone_flags.test(eBlowoutDisableIdle)) PlayIdleParticles();

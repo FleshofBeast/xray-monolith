@@ -466,7 +466,7 @@ BOOL CGameObject::net_Spawn(CSE_Abstract* DC)
 
 	m_bObjectRemoved = false;
 
-	if (!engine_coopnet::world_level_is_replica()) spawn_supplies();
+	if (!engine_coopnet::passive_world_replica()) spawn_supplies();
 	if (!bind_actor_scripts)
 		return TRUE;
 #ifdef DEBUG
@@ -1101,7 +1101,7 @@ void CGameObject::shedule_Update(u32 dt)
 	// Msg							("-SUB-:[%x][%s] CGameObject::shedule_Update",smart_cast<void*>(this),*cName());
 	inherited::shedule_Update(dt);
 
-	if (!g_dedicated_server && !engine_coopnet::world_level_is_replica())
+	if (!g_dedicated_server && !engine_coopnet::passive_world_replica())
 		CScriptBinder::shedule_Update(dt);
 }
 

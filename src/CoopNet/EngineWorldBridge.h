@@ -81,6 +81,10 @@ bool apply_world_object(std::uint64_t session,std::uint64_t anchor,std::uint64_t
     const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations={},
     std::uint8_t zone_state=255,std::uint32_t zone_time=0);
 bool world_level_is_replica();
+// Development migration: retain joined-world identity while restoring local native simulation.
+bool guest_native_world();
+bool native_world_requested();
+bool passive_world_replica();
 void world_object_spawned(CGameObject* object,const CSE_Abstract* source);
 void world_object_destroyed(CGameObject* object);
 bool world_replica_object(const CGameObject* object);

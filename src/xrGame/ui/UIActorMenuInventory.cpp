@@ -72,7 +72,7 @@ void CUIActorMenu::DeInitInventoryMode()
 
 void CUIActorMenu::SendEvent_ActivateSlot(u16 slot, u16 recipient)
 {
-    if (Actor() && Actor()->ID()==recipient && engine_coopnet::world_level_is_replica()) {
+    if (Actor() && Actor()->ID()==recipient && engine_coopnet::passive_world_replica()) {
         if (slot==NO_ACTIVE_SLOT) {
             auto* active=Actor()->inventory().ActiveItem();
             if (active) engine_coopnet::queue_local_inventory_action(active->object().ID(),coopnet::InventoryAction::Holster);

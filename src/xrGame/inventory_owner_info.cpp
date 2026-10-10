@@ -45,7 +45,7 @@ void CInventoryOwner::OnEvent(NET_Packet& P, u16 type)
 
 bool CInventoryOwner::OnReceiveInfo(shared_str info_id) const
 {
-    if (engine_coopnet::world_level_is_replica()) return false;
+    if (engine_coopnet::passive_world_replica()) return false;
 	VERIFY(info_id.size());
 	//добавить запись в реестр
 	KNOWN_INFO_VECTOR& known_info = m_known_info_registry->registry().objects();
@@ -80,7 +80,7 @@ void CInventoryOwner::DumpInfo() const
 
 void CInventoryOwner::OnDisableInfo(shared_str info_id) const
 {
-    if (engine_coopnet::world_level_is_replica()) return;
+    if (engine_coopnet::passive_world_replica()) return;
 	VERIFY(info_id.size());
 	//удалить запись из реестра
 
@@ -98,7 +98,7 @@ void CInventoryOwner::OnDisableInfo(shared_str info_id) const
 
 void CInventoryOwner::TransferInfo(shared_str info_id, bool add_info) const
 {
-    if (engine_coopnet::world_level_is_replica()) return;
+    if (engine_coopnet::passive_world_replica()) return;
 	VERIFY(info_id.size());
 	const CObject* pThisObject = smart_cast<const CObject*>(this);
 	VERIFY(pThisObject);

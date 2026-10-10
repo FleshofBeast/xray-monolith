@@ -183,7 +183,7 @@ void CLevel::net_Stop()
 
 void CLevel::ClientSend()
 {
-	if (engine_coopnet::world_level_is_replica()) return;
+	if (engine_coopnet::passive_world_replica()) return;
 	if (GameID() != eGameIDSingle && OnClient())
 	{
 		if (!net_HasBandwidth()) return;
@@ -278,7 +278,7 @@ u32 CLevel::Objects_net_Save(NET_Packet* _Packet, u32 start, u32 max_object_size
 
 void CLevel::ClientSave()
 {
-	if (engine_coopnet::world_level_is_replica()) return;
+	if (engine_coopnet::passive_world_replica()) return;
 	NET_Packet P;
 	u32 start = 0;
 

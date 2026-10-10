@@ -1047,7 +1047,7 @@ void CLevel::OnFrame()
 			//    m_game_task_manager,&CGameTaskManager::UpdateTasks));
 			//}
 			//else
-			if (!engine_coopnet::world_level_is_replica()) GameTaskManager().UpdateTasks();
+			if (!engine_coopnet::passive_world_replica()) GameTaskManager().UpdateTasks();
 		}
 	}
 	// Inherited update
@@ -1139,10 +1139,10 @@ void CLevel::OnFrame()
 #endif
 	g_pGamePersistent->Environment().SetGameTime(GetEnvironmentGameDayTimeSec(),
 	                                             game->GetEnvironmentGameTimeFactor());
-	if (!g_dedicated_server && !engine_coopnet::world_level_is_replica())
+	if (!g_dedicated_server && !engine_coopnet::passive_world_replica())
 		ai().script_engine().script_process(ScriptEngine::eScriptProcessorLevel)->update();
 	m_ph_commander->update();
-	if (!engine_coopnet::world_level_is_replica()) m_ph_commander_scripts->update();
+	if (!engine_coopnet::passive_world_replica()) m_ph_commander_scripts->update();
 	Device.Statistic->TEST0.Begin();
 	BulletManager().CommitRenderSet();
 	Device.Statistic->TEST0.End();
@@ -1678,7 +1678,7 @@ void CLevel::PhisStepsCallback(u32 Time0, u32 Time1)
 void CLevel::SetNumCrSteps(u32 NumSteps)
 {
     // Update interpolation timing here, as the legacy packet handlers do.
-    if(IsGameTypeSingle() && engine_coopnet::world_level_is_replica()) UpdateDeltaUpd(timeServer());
+    if(IsGameTypeSingle() && engine_coopnet::passive_world_replica()) UpdateDeltaUpd(timeServer());
 	m_bNeed_CrPr = true;
 	if (m_dwNumSteps > NumSteps)
 		return;

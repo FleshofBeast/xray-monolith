@@ -1,4 +1,4 @@
-param([switch]$Launch, [switch]$LoadFixture, [switch]$ReplicaProbe, [switch]$MovementProbe, [switch]$ManualControls, [switch]$GameplayProbe, [switch]$WorldProbe, [switch]$PartyProbe, [switch]$WeaponProbe, [switch]$InventoryProbe, [switch]$WorldLootProbe, [switch]$SettingsProbe, [switch]$RespawnProbe, [switch]$SharedWorldProbe, [switch]$ContainerProbe, [switch]$ContainerRecoveryProbe, [switch]$DialogueProbe, [switch]$NameplateProbe, [switch]$FactionProbe, [switch]$MutantProbe, [switch]$StarterProbe, [string]$TestDirectory)
+param([switch]$Launch, [switch]$LoadFixture, [switch]$ReplicaProbe, [switch]$MovementProbe, [switch]$ManualControls, [switch]$GameplayProbe, [switch]$WorldProbe, [switch]$PartyProbe, [switch]$WeaponProbe, [switch]$InventoryProbe, [switch]$WorldLootProbe, [switch]$SettingsProbe, [switch]$RespawnProbe, [switch]$SharedWorldProbe, [switch]$ContainerProbe, [switch]$ContainerRecoveryProbe, [switch]$DialogueProbe, [switch]$NameplateProbe, [switch]$FactionProbe, [switch]$MutantProbe, [switch]$StarterProbe, [switch]$NativeWorldProbe, [string]$TestDirectory)
 $ErrorActionPreference = 'Stop'
 if ($PartyProbe) { $WorldProbe=$true }
 if ($SettingsProbe) { $WorldProbe=$true }
@@ -90,6 +90,7 @@ if ($Launch) {
     foreach ($role in @('host', 'guest')) {
         $root = Join-Path $testRoot $role
         $probeArguments=@('-silent_error_mode','-noprefetch','-coop_engine_fixture')
+        if ($NativeWorldProbe) { $probeArguments+='-coop_native_world' }
         if ($RespawnProbe) { $probeArguments+='-coop_respawn_spectator_probe' }
         if ($FactionProbe -and $role -eq 'host') { $probeArguments+='-coop_faction_probe' }
         if ($MutantProbe -and $role -eq 'host') { $probeArguments+='-coop_mutant_probe' }

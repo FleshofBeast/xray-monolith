@@ -439,3 +439,23 @@ Validation: all 20 standalone suites passed (_build/spectator-unit1.log), includ
 Guest native controls/physics own ordinary player movement. The host interpolates reported position, velocity and movement state without running movement physics a second time. Host echoes do not correct the owner. Initial placement, group travel and respawn remain host-controlled; respawn epochs discard stale pre-respawn poses. Shared health, combat, NPC AI and world state remain host-owned. Validation: all 20 standalone suites and the final DX11 build passed. The 150-second native movement/world/weapon run processed 3,164 guest inputs with zero camera discontinuities across 3,000 logged samples (maximum step 0.186 m). A deliberately perturbed host echo 20 m away did not correct the guest. Electric blowout particles, NPC spawn/death/removal, quest completion/failure and loot transactions passed. A separate 160-second respawn run passed both teammate revival paths, equipment retention and the all-dead guard. A 150-second party run passed gathering/reset, destination loading and weapon/ammunition restoration. Private fixture source hashes remained unchanged. Real internet conditions and subjective movement feel still require player testing.
 
 The same checkpoint binds baseline anomalies only to a unique existing zone at the host position, handling native ID allocation differences. An existing movement HUD include of Actor.cpp was replaced by a header/declaration, eliminating duplicate actor definitions and global initialization; three complete native runs passed after this build fix. Full combat damage and complete story/world synchronization remain separate validation work.
+
+## Native world development path (2026-10-10)
+
+An unpublished, opt-in `-coop_native_world` path restores native guest frame/script,
+inventory and quest operations while retaining host-owned shared NPC decisions.
+Native spawned replicas now register local ALife records required by stock Lua
+binders. Failed mutant spawn cleanup handles missing squads, and stale host poses
+cannot resurrect a natively dead actor with unregistered AI senses. Inventory
+bootstrap completion is tracked per actor incarnation; later host views and
+container depletion do not overwrite personal guest state in this development
+mode. Host quest snapshots, including packets received before baseline loading,
+are excluded.
+
+Build and all 20 standalone suites passed. Two isolated 120-second native runs
+passed native stalker frame completion and dynamic NPC spawning. The expanded run
+also verified the same shared enemy's spawn/death/removal, native trader
+recreation, quest snapshot exclusion, normal shutdown and unchanged private saves.
+Shared guest-originated hits, complete personal quest restoration and persistent
+instanced loot remain unfinished; this is not a release-ready world rewrite.
+See [native world rework](NATIVE_WORLD_REWORK.md) for evidence and the test command.

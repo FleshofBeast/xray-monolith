@@ -1416,7 +1416,8 @@ void update(double) {
             update_guest_ui(elapsed);
             exercise_guest_features_probe(elapsed);
             if(session->shared_radio_pending && apply_radio_history(session->client.session().welcome().session,session->shared_radio_level,session->shared_radio)) session->shared_radio_pending=false;
-            if (session->shared_quests_pending && apply_shared_quests(session->client.session().welcome().session,session->shared_quest_level,session->shared_quests)) session->shared_quests_pending=false;
+            if (guest_native_world()) session->shared_quests_pending=false;
+            else if (session->shared_quests_pending && apply_shared_quests(session->client.session().welcome().session,session->shared_quest_level,session->shared_quests)) session->shared_quests_pending=false;
             if (session->settings_probe) exercise_world_settings_probe();
             if (session->loot_probe) exercise_local_world_loot_probe();
             if (session->container_probe) exercise_local_container_probe();
@@ -1713,7 +1714,7 @@ void command(const char* name, const char* arguments) {
                 const auto* actor=owner->client.actors().find(vitals.actor);
                 if(actor && actor->player==owner->client.session().welcome().player) owner->exit_condition={vitals.health,vitals.power,vitals.radiation};
                 if (actor && actor->player==owner->client.session().welcome().player &&
-                    apply_local_condition(vitals.level,{vitals.health,vitals.power,vitals.radiation})) {
+                    !guest_native_world() && apply_local_condition(vitals.level,{vitals.health,vitals.power,vitals.radiation})) {
                     ++owner->condition_corrections;
                     if (vitals.tick%25==0) Msg("* CoopNet authoritative guest health applied: %.3f",vitals.health);
                 }
@@ -1730,6 +1731,7 @@ void command(const char* name, const char* arguments) {
                 } else owner->respawn_message=result.status==coopnet::RespawnStatus::NoLivingPlayer ? "No living teammate is available." : "Respawn is unavailable. Try again when a teammate is alive.";
             });
             next->client.set_shared_world_sink([owner](coopnet::SharedKind kind,std::uint32_t level,const std::vector<std::uint8_t>& bytes) {
+                if (native_world_requested() && kind==coopnet::SharedKind::Quests) return;
                 if (!owner->world_probe) return;
                 if (kind==coopnet::SharedKind::NPC) {
                     std::vector<coopnet::NPCRecord> records; if (coopnet::decode_npcs(bytes,records)) queue_npc_catalogue(owner->client.session().welcome().session,level,records);

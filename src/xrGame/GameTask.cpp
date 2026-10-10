@@ -41,7 +41,7 @@ CGameTask::CGameTask()
 
 void CGameTask::SetTaskState(ETaskState state)
 {
-    if (engine_coopnet::world_level_is_replica()) return;
+    if (engine_coopnet::passive_world_replica()) return;
     engine_coopnet::SharedQuestRewardScope reward(m_ID.size()?m_ID.c_str():"",m_ReceiveTime,
         state==eTaskStateCompleted && m_task_state==eTaskStateInProgress);
 	m_task_state = state;
@@ -147,13 +147,13 @@ void CGameTask::ChangeMapLocation(LPCSTR new_map_location, u16 new_map_object_id
 
 void CGameTask::ChangeStateCallback()
 {
-    if (engine_coopnet::world_level_is_replica()) return;
+    if (engine_coopnet::passive_world_replica()) return;
 	Actor()->callback(GameObject::eTaskStateChange)(this, GetTaskState());
 }
 
 ETaskState CGameTask::UpdateState()
 {
-    if (engine_coopnet::world_level_is_replica()) return GetTaskState();
+    if (engine_coopnet::passive_world_replica()) return GetTaskState();
 	if ((m_ReceiveTime != m_TimeToComplete))
 	{
 		if (Level().GetGameTime() > m_TimeToComplete)

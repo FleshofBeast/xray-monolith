@@ -94,7 +94,7 @@ CGameTask* CGameTaskManager::HasGameTask(const shared_str& id, bool only_inproce
 
 CGameTask* CGameTaskManager::GiveGameTaskToActor(CGameTask* t, u32 timeToComplete, bool bCheckExisting, u32 timer_ttl)
 {
-    if (engine_coopnet::world_level_is_replica()) { xr_delete(t); return NULL; }
+    if (engine_coopnet::passive_world_replica()) { xr_delete(t); return NULL; }
 	t->CommitScriptHelperContents();
 	if (/* bCheckExisting &&*/ HasGameTask(t->m_ID, true))
 	{
@@ -144,7 +144,7 @@ void CGameTaskManager::CoopTasksChanged()
 
 void CGameTaskManager::SetTaskState(CGameTask* t, ETaskState state)
 {
-    if (engine_coopnet::world_level_is_replica()) return;
+    if (engine_coopnet::passive_world_replica()) return;
 	m_flags.set(eChanged, TRUE);
 
 	t->SetTaskState(state);

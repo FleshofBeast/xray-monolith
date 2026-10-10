@@ -8,6 +8,7 @@
 
 #include "pch_script.h"
 #include "ai_stalker.h"
+#include "../../../CoopNet/EngineWorldBridge.h"
 #include "../ai_monsters_misc.h"
 #include "../../weapon.h"
 #include "../../hit.h"
@@ -1110,6 +1111,8 @@ void CAI_Stalker::UpdateCL()
 #endif
 		STOP_PROFILE
 	STOP_PROFILE
+    if (engine_coopnet::guest_native_world() && strstr(Core.Params, "-coop_engine_fixture") && Device.dwFrame%300==0)
+        Msg("* CoopNet native stalker frame completed: object %u alive %u",ID(),unsigned(g_Alive()));
 }
 
 void CAI_Stalker::PHHit(SHit& H)

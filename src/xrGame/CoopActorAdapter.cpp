@@ -187,6 +187,7 @@ bool apply_player_progress(CActor* actor,const coopnet::PlayerProgress& p) {
     return true;
 }
 void update_guest_ui(double elapsed) {
+    if (guest_native_world()) return; // Stock actor binder now runs the full callbacks.
     LocalActorPose pose;
     if(!world_level_is_replica() || !capture_local_actor(pose) || !CurrentGameUI()) return;
     static std::uint64_t initialized=0;
@@ -742,6 +743,9 @@ bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint6
         if (!record.second.replica || object->getDestroy() || (record.second.anchor ? record.second.anchor : coopnet::world_anchor(session_id,object->ID()))!=anchor) continue;
         auto* entity=smart_cast<CEntityAlive*>(object);
         if (!entity || object->cast_actor() || (record.second.authority && record.second.authority!=incarnation)) return false;
+        // Native death unregisters squad senses and AI membership. A pose cannot
+        // resurrect that object; a new lifetime must come through the catalogue.
+        if (guest_native_world() && entity->AlreadyDie() && health>0) return true;
         if (record.second.dead && health>0) return false;
         record.second.authority=incarnation; record.second.anchor=anchor;
         object->setVisible(TRUE); object->setEnabled(TRUE);
@@ -764,7 +768,9 @@ bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint6
             }
         }
         if (auto* support=entity->character_physics_support()) if (support->movement() && support->movement()->CharacterExist()) {
-            support->movement()->SetPosition(object->Position()); support->movement()->DisableCharacter();
+            support->movement()->SetPosition(object->Position());
+            if (guest_native_world()) support->movement()->EnableCharacter();
+            else support->movement()->DisableCharacter();
         }
         entity->SetfHealth(health);
         if (health<=0 && !record.second.dead) {
@@ -879,6 +885,15 @@ void update_npc_catalogue() {
             abstract->o_Angle.set(n.pose.rotation[0],n.pose.rotation[1],n.pose.rotation[2]);
             NET_Packet packet; abstract->Spawn_Write(packet,TRUE); u16 type; packet.r_begin(type);
             auto* created=Level().Server->Process_spawn(packet,Level().Server->GetServerClient()->ID,FALSE,nullptr,true); F_entity_Destroy(abstract);
+            if (created && guest_native_world()) {
+                // Native binders require alife_object(id) during net_Spawn.
+                // Register the guest's local world object before its queued spawn
+                // event runs; the host still controls its shared identity/lifetime.
+                if (auto* persistent=smart_cast<CSE_ALifeDynamicObject*>(created)) {
+                    persistent->m_bOnline=true; persistent->m_bALifeControl=true;
+                    const_cast<CALifeSimulator&>(ai().alife()).create(persistent);
+                }
+            }
             if (created) npc_pending[n.pose.anchor]={created->ID,n.pose.incarnation};
             continue;
         }
@@ -919,6 +934,7 @@ void queue_container_catalogue(std::uint64_t session,std::uint32_t level,const s
     container_session=session; container_level=level; container_catalogue=records; container_dirty=true;
 }
 void update_container_catalogue() {
+    if (guest_native_world()) return;
     if (!container_dirty && container_pending.empty()) return;
     LocalActorPose local; if (!world_level_is_replica() || !capture_local_actor(local) || local.level!=container_level) return;
     // Bind async spawns before removing entries; local native IDs need not equal host IDs.
@@ -1485,6 +1501,11 @@ bool world_level_is_replica() {
     const auto length=replica_world_save.size();
     return options.size()>length && !strncmp(options.c_str(),replica_world_save.c_str(),length) && options.c_str()[length]=='/';
 }
+bool guest_native_world() {
+    return world_level_is_replica() && native_world_requested();
+}
+bool native_world_requested() { return strstr(Core.Params,"-coop_native_world")!=nullptr; }
+bool passive_world_replica() { return world_level_is_replica() && !guest_native_world(); }
 void world_object_spawned(CGameObject* object,const CSE_Abstract* source) {
     if (!collect_world_objects && replica_world_save.empty()) return;
     bool replica=world_level_is_replica();
@@ -1507,11 +1528,13 @@ void world_object_destroyed(CGameObject* object) {
     world_objects.erase(found);
 }
 bool world_replica_object(const CGameObject* object) {
+    if (guest_native_world()) return false;
     if (!world_replica_count) return false;
     const auto found=world_objects.find(object);
     return found!=world_objects.end() && found->second.replica;
 }
 bool update_world_replica(CObject* base) {
+    if (guest_native_world()) return false;
     if (!world_replica_count) return false;
     auto* object=smart_cast<CGameObject*>(base);
     if (!object) return false;
@@ -1546,7 +1569,15 @@ bool update_world_replica(CObject* base) {
 bool schedule_world_replica(ISheduled* scheduled,std::uint32_t elapsed) {
     if (!world_replica_count) return false;
     auto* object=smart_cast<CGameObject*>(scheduled);
-    if (!object || !world_replica_object(object)) return false;
+    if (!object) return false;
+    if (guest_native_world()) {
+        const auto binding=world_objects.find(object);
+        if (binding==world_objects.end() || !binding->second.replica ||
+            !smart_cast<CEntityAlive*>(object) || object->cast_actor()) return false;
+        // Native frame updates provide local playback. Scheduled AI decisions
+        // belong to the host; running a second planner fights shared poses and
+        // can locally kill/unregister an NPC before its host lifetime ends.
+    } else if (!world_replica_object(object)) return false;
     object->CObject::shedule_Update(elapsed);
     ++replica_schedules; return true;
 }
@@ -1583,6 +1614,7 @@ std::uint64_t item_incarnation=0;
 coopnet::InventoryView local_inventory_view;
 xr_map<std::uint64_t,u16> local_inventory_items;
 std::uint64_t inventory_local_incarnation=0;
+std::uint64_t native_inventory_ready_incarnation=0;
 bool inventory_cleared=false;
 std::uint32_t inventory_reported=0;
 std::deque<LocalInventoryAction> local_inventory_actions;
@@ -1788,6 +1820,7 @@ void queue_world_item_state(std::uint64_t session,const coopnet::ItemState& item
     local_world_session=session; local_world_items[item.item]=item; retired_world_items.erase(item.item);
 }
 void update_world_items() {
+    if (guest_native_world()) return; // Each client retains its own native loot instance.
     LocalActorPose pose; if (!world_level_is_replica() || !capture_local_actor(pose) || !local_world_session) return;
     for (const auto& record:local_world_items) {
         const auto& state=record.second; if (state.level!=pose.level) continue;
@@ -2029,7 +2062,7 @@ std::uint64_t join_character_identity(std::uint64_t proposed,bool replace) {
     return proposed;
 }
 bool capture_owned_character(coopnet::InventoryView& output) {
-    if(world_level_is_replica()) {
+    if(passive_world_replica()) {
         if(!local_inventory_view.actor || !coopnet::valid_inventory_view(local_inventory_view)) return false;
         output=local_inventory_view;output.actor=1;output.generation=output.level=output.revision=1;output.npc_disposition.clear();
         const auto active=output.active;output.active=0;
@@ -2121,6 +2154,7 @@ bool begin_guest_loadout(std::uint16_t owner) {
 }
 void queue_local_inventory_view(const coopnet::InventoryView& view) { local_inventory_view=view; }
 bool queue_local_inventory_action(std::uint16_t object,coopnet::InventoryAction action,std::uint16_t slot) {
+    if (guest_native_world()) return false;
     if (!world_level_is_replica()) return false;
     if (action==coopnet::InventoryAction::Take) for (const auto& record:local_world_objects) if (record.second==object) {
         const auto state=local_world_items.find(record.first);
@@ -2357,6 +2391,7 @@ NativeInventoryStatus transact_owned_item(std::uint16_t owner,std::uint16_t item
 void update_local_inventory_view() {
     LocalActorPose pose;
     if (!world_level_is_replica() || !local_inventory_view.actor || !capture_local_actor(pose) || pose.level!=local_inventory_view.level || !Level().Server) return;
+    if (guest_native_world() && native_inventory_ready_incarnation==pose.incarnation) return;
     if (!local_inventory_view.community.empty() && !apply_actor_community(g_actor,local_inventory_view.community,inventory_local_incarnation!=pose.incarnation)) return;
     if(!apply_player_progress(g_actor,local_inventory_view.progress)) return;
     for (const auto& relation:local_inventory_view.npc_disposition) for (const auto& binding:world_objects) {
@@ -2448,6 +2483,7 @@ void update_local_inventory_view() {
         auto* weapon=smart_cast<CWeapon*>(g_actor->inventory().ActiveItem());
         Msg("* CoopNet guest inventory view applied: items %u active rounds %d rubles %u",static_cast<unsigned>(local_inventory_view.items.size()),weapon ? weapon->GetAmmoElapsed() : -1,g_actor->get_money());
     }
+    if (guest_native_world()) native_inventory_ready_incarnation=pose.incarnation;
 }
 bool restore_guest_inventory(std::uint16_t owner,const GuestInventoryState& state) {
     LocalActorPose pose; if (!capture_guest_actor(owner,pose) || state.items.size()>256 ||
@@ -2732,7 +2768,7 @@ void guest_level_stopped() { forget_all_native_awards(); guests.clear(); session
 void local_actor_spawned() { ++local_incarnation; local_controls = {}; controls_time = 0; local_weapon_buttons=0; local_movement_probe_active=false;
     local_world_items.clear(); local_world_objects.clear(); retired_world_items.clear(); local_world_session=0;
     loot_probe_phase=0; loot_probe_item=0;
-    local_inventory_view={}; local_inventory_items.clear(); local_inventory_actions.clear(); inventory_cleared=false; inventory_reported=0; inventory_probe_phase=0; }
+    local_inventory_view={}; local_inventory_items.clear(); local_inventory_actions.clear(); inventory_cleared=false; inventory_reported=0; native_inventory_ready_incarnation=0; inventory_probe_phase=0; }
 bool record_coopnet_weapon_input(std::uint16_t object,int command,bool pressed) {
     if (!world_level_is_replica() || !g_actor || g_actor->ID()!=object) return false;
     if (command>=kWPN_1 && command<=kWPN_6) {

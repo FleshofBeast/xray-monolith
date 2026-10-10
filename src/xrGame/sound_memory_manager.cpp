@@ -321,7 +321,7 @@ void CSoundMemoryManager::update()
 	START_PROFILE("Memory Manager/sounds::update")
 		clear_delayed_objects();
 
-		VERIFY(m_sounds);
+		R_ASSERT2(m_sounds, *m_object->cName());
 		m_sounds->erase(
 			std::remove_if(
 				m_sounds->begin(),

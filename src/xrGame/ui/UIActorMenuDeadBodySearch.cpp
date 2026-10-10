@@ -23,7 +23,7 @@
 
 void move_item_from_to(u16 from_id, u16 to_id, u16 what_id)
 {
-    if (engine_coopnet::world_level_is_replica()) {
+    if (engine_coopnet::passive_world_replica()) {
         // Presentation ownership follows the host reply, never the local drag operation.
         if (g_actor && to_id==g_actor->ID()) engine_coopnet::queue_local_inventory_action(what_id,coopnet::InventoryAction::Take);
         return;
@@ -192,7 +192,7 @@ void CUIActorMenu::DeInitDeadBodySearchMode()
 
 bool CUIActorMenu::ToDeadBodyBag(CUICellItem* itm, bool b_use_cursor_pos)
 {
-    if (engine_coopnet::world_level_is_replica()) return false; // deposits need their own host transaction
+    if (engine_coopnet::passive_world_replica()) return false; // deposits need their own host transaction
 	if (m_pPartnerInvOwner)
 	{
 		if (!m_pPartnerInvOwner->deadbody_can_take_status())
