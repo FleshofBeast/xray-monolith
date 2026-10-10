@@ -6,6 +6,7 @@ The current implementation uses one host world and group location transitions. G
 
 ## Documents
 
+- [Guest simulation and TES3MP comparison](GUEST_SIMULATION.md): local playback, host authority, current fixes and missing integration tests.
 - [Respawn](RESPAWN.md): host-validated revival, all-dead behavior and retained equipment.
 - [Connecting players](CONNECTING.md): client requirements and direct host/join commands.
 - [Guest weapons and saved state](GUEST_STATE.md): implementation and remaining character/inventory limits.

@@ -81,6 +81,19 @@ bool install_guest_combat_rules() {
     if (!lua_istable(state,-1)) { lua_settop(state,top); return false; }
     lua_getfield(state,-1,"coopnet_players"); const bool installed=lua_toboolean(state,-1)!=0; lua_pop(state,1);
     if (installed) { lua_settop(state,top); return true; }
+    // The stock evaluator closes over this table. A replacement loaded with only
+    // its module environment cannot see locals, and must retain the same table.
+    const int module=lua_gettop(state);
+    lua_getfield(state,module,"is_enemy"); bool zones_found=false;
+    if (lua_isfunction(state,-1)) for (int index=1;;++index) {
+        const char* name=lua_getupvalue(state,-1,index); if (!name) break;
+        if (!strcmp(name,"ignored_zone") && lua_istable(state,-1)) {
+            lua_setfield(state,module,"coopnet_ignored_zone"); zones_found=true; break;
+        }
+        lua_pop(state,1);
+    }
+    lua_pop(state,1);
+    if (!zones_found) { Msg("! CoopNet combat evaluator has no stock ignored_zone table; preserving original evaluator"); lua_settop(state,top); return false; }
     const char* source=
 #include "CoopNetCombatIgnore.inc"
     ;
@@ -663,6 +676,23 @@ bool capture_world_objects(std::uint32_t& level,std::vector<NativeWorldPose>& ob
         for (unsigned axis=0;axis<3;++axis) pose.position[axis]=object->Position()[axis];
         object->XFORM().getHPB(pose.rotation[0],pose.rotation[1],pose.rotation[2]);
         pose.health=entity->GetfHealth(); clamp(pose.health,-1.f,1.f); objects.push_back(pose);
+        if (object->Visual()) if (auto* animated=object->Visual()->dcast_PKinematicsAnimated()) {
+            for (unsigned part=0;part<4;++part) {
+                if (!animated->LL_MotionsSlotCount()) break;
+                auto& motions=const_cast<shared_motions&>(animated->LL_MotionsSlot(0));
+                if (part>=motions.partition()->count()) break;
+                CBlend* best=nullptr;
+                for (unsigned i=0;i<animated->LL_PartBlendsCount(part);++i) {
+                    auto* blend=animated->LL_PartBlend(part,i);
+                    if (blend && blend->channel==0 && blend->motionID.valid() && (!best || blend->blendAmount>best->blendAmount)) best=blend;
+                }
+                if (best) {
+                    coopnet::WorldAnimation a; a.part=static_cast<std::uint8_t>(part); a.slot=best->motionID.slot; a.motion=best->motionID.idx;
+                    a.time=best->timeCurrent; a.speed=best->speed; a.stop=best->stop_at_end!=FALSE;
+                    if (coopnet::valid_world_animation(a)) objects.back().animations.push_back(a);
+                }
+            }
+        }
         if (objects.size()>=4096) break;
     }
     return true;
@@ -680,7 +710,7 @@ void capture_guest_disposition(std::uint64_t session,std::uint16_t object,coopne
     }
 }
 bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint64_t incarnation,
-    const float* position,const float* rotation,float health) {
+    const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations) {
     if (!world_level_is_replica() || !g_pGameLevel->bReady) return false;
     for (auto& record:world_objects) {
         auto* object=const_cast<CGameObject*>(record.first);
@@ -689,7 +719,25 @@ bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint6
         if (!entity || object->cast_actor() || (record.second.authority && record.second.authority!=incarnation)) return false;
         if (record.second.dead && health>0) return false;
         record.second.authority=incarnation; record.second.anchor=anchor;
+        object->setVisible(TRUE); object->setEnabled(TRUE);
         object->XFORM().setHPB(rotation[0],rotation[1],rotation[2]); object->Position().set(position[0],position[1],position[2]);
+        if (object->Visual()) if (auto* animated=object->Visual()->dcast_PKinematicsAnimated()) {
+            for (const auto& a:animations) {
+                if (!coopnet::valid_world_animation(a) || a.slot>=animated->LL_MotionsSlotCount()) continue;
+                auto& motions=const_cast<shared_motions&>(animated->LL_MotionsSlot(a.slot));
+                if (a.motion>=motions.motion_defs()->size() || a.part>=motions.partition()->count()) continue;
+                const MotionID motion(a.slot,a.motion); CBlend* active=nullptr;
+                for (unsigned i=0;i<animated->LL_PartBlendsCount(a.part);++i) {
+                    auto* blend=animated->LL_PartBlend(a.part,i);
+                    if (blend && blend->channel==0 && blend->motionID==motion) { active=blend; break; }
+                }
+                if (!active) active=animated->PlayCycle(a.part,motion,TRUE,nullptr,nullptr,0,a.speed);
+                if (!active) continue;
+                if (fabsf(active->timeCurrent-a.time)>.15f) active->timeCurrent=(std::min)(a.time,active->timeTotal);
+                active->speed=a.speed; active->stop_at_end=a.stop; active->Callback=nullptr; active->CallbackParam=nullptr;
+                record.second.animated=true;
+            }
+        }
         if (auto* support=entity->character_physics_support()) if (support->movement() && support->movement()->CharacterExist()) {
             support->movement()->SetPosition(object->Position()); support->movement()->DisableCharacter();
         }

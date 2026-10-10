@@ -17,6 +17,26 @@ int main() {
     auto invalid=state; invalid.objects.push_back(invalid.objects.front()); require(!valid_world_state(invalid));
     invalid=state; invalid.objects.front().health=std::numeric_limits<float>::quiet_NaN(); require(!valid_world_state(invalid));
     invalid=state; invalid.objects.resize(129); require(!valid_world_state(invalid));
+    auto animated=state; animated.objects.front().animations={{0,2,17,.5f,1.25f,false},{3,0,41,2.f,.75f,true}};
+    encoded=encode_world_state(animated);
+    require(decode_world_state(encoded,decoded));
+    require(decoded.objects.front().animations.size()==2);
+    const auto& motion=decoded.objects.front().animations.back();
+    require(motion.part==3 && motion.slot==0 && motion.motion==41 && motion.time==2.f && motion.speed==.75f && motion.stop);
+    for (std::size_t n=0;n<encoded.size();++n) require(!decode_world_state({encoded.begin(),encoded.begin()+n},decoded));
+    invalid=animated; invalid.objects.front().animations.back().part=0; require(!valid_world_state(invalid));
+    invalid=animated; invalid.objects.front().animations.front().time=std::numeric_limits<float>::quiet_NaN(); require(!valid_world_state(invalid));
+    invalid=animated; invalid.objects.front().animations.front().speed=-1.f; require(!valid_world_state(invalid));
+    invalid=animated; invalid.objects.front().animations.front().slot=256; require(!valid_world_state(invalid));
+    invalid=animated; invalid.objects.front().animations.front().motion=65535; require(!valid_world_state(invalid));
+    encoded.back()=2; require(!decode_world_state(encoded,decoded));
+    auto maximum=state; maximum.objects.clear();
+    for (unsigned i=0;i<128;++i) {
+        auto object=state.objects.front(); object.anchor=world_anchor(123,static_cast<std::uint16_t>(i));
+        for (unsigned part=0;part<4;++part) object.animations.push_back({static_cast<std::uint8_t>(part),0,1,0.f,1.f,false});
+        maximum.objects.push_back(object);
+    }
+    encoded=encode_world_state(maximum); require(encoded.size()<16384 && decode_world_state(encoded,decoded));
     HostPump host; ClientPump client; auto links=MemoryTransport::pair(); Identity token=10;
     host.start(123,1,{1,1},[&] { return ++token; }); require(host.attach(1,std::move(links.second)));
     client.start(std::move(links.first),2,{1,1}); auto pump=[&] { host.update(.01); client.update(.01); };

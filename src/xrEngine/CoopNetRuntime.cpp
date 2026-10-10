@@ -435,6 +435,7 @@ void publish_world(Session& current) {
     for (const auto& native:objects) {
         coopnet::WorldPose pose; pose.anchor=coopnet::world_anchor(current.host.identity(),native.object);
         pose.incarnation=native.incarnation; pose.health=native.health;
+        pose.animations=native.animations;
         for (unsigned axis=0;axis<3;++axis) { pose.position[axis]=native.position[axis]; pose.rotation[axis]=native.rotation[axis]; }
         state.objects.push_back(pose);
         if (state.objects.size()==128) { current.host.publish_world_state(state); state.objects.clear(); }
@@ -1695,7 +1696,7 @@ void command(const char* name, const char* arguments) {
                 unsigned applied=0;
                 for (const auto& object:state.objects)
                     if (apply_world_object(owner->client.session().welcome().session,object.anchor,object.incarnation,
-                        object.position.data(),object.rotation.data(),object.health)) ++applied;
+                        object.position.data(),object.rotation.data(),object.health,object.animations)) ++applied;
                 owner->world_updates+=applied;
                 if (applied && owner->world_updates==applied)
                     Msg("* CoopNet authoritative NPC states applied: objects %u level %u",applied,state.level);

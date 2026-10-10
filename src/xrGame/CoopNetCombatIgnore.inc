@@ -1,5 +1,6 @@
 // Anomaly 1.5.3 combat evaluation, with every actor treated as a player.
 R"COOPLUA(
+local ignored_zone = coopnet_ignored_zone
 function is_enemy(obj,enemy,no_memory)
 	--utils_data.debug_write("eval_is_enemy")
 	if(device().precache_frame > 1) then
