@@ -2,7 +2,9 @@
 #include "UIMainIngameWnd.h"
 #include "UIMotionIcon.h"
 #include "UIXmlInit.h"
-#include "../actor.cpp"
+#include "../Actor.h"
+
+float GetActorVisibility();
 
 const LPCSTR MOTION_ICON_XML = "motion_icon.xml";
 

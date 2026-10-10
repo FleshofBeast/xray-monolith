@@ -1835,6 +1835,16 @@ void CActor::coopnet_place(const Fvector& position,const Fvector& velocity)
     Fmatrix transform=XFORM(); transform.c=position; ForceTransform(transform);
     character_physics_support()->movement()->SetVelocity(velocity);
 }
+void CActor::coopnet_owner_pose(const Fvector& position,const Fvector& velocity,u16 movement)
+{
+    if (!m_coopnet_guest || m_coopnet_downed) return;
+    m_coopnet_owner_movement=true;
+    XFORM().c=position;
+    auto* controller=character_physics_support()->movement();
+    controller->SetPosition(position); controller->SetVelocity(velocity); controller->DisableCharacter();
+    mstate_real=movement; mstate_wishful=movement;
+    spatial_move();
+}
 void CActor::coopnet_controls(u16 buttons, float yaw, float pitch)
 {
 	if (!m_coopnet_guest) return;
@@ -1905,6 +1915,15 @@ void CActor::shedule_Update(u32 DT)
 		Fvector point = Position(), noise; noise.set(0,0,0);
 		cam_FirstEye()->Update(point, noise);
 		g_cl_Orientate(mstate_real, dt);
+		if (m_coopnet_owner_movement) {
+			// The owner already simulated physics. Maintain the native remote body
+			// and inventory without integrating the same movement again on the host.
+			g_Orientate(mstate_real,dt); g_SetAnimation(mstate_real);
+			mstate_old=mstate_real; NET_Jump=0;
+			inherited::shedule_Update(DT);
+			engine_coopnet::guest_input_simulated(ID()); setVisible(TRUE);
+			return;
+		}
 		g_cl_CheckControls(mstate_wishful, NET_SavedAccel, NET_Jump, dt);
 		g_Orientate(mstate_real, dt);
 		if (Device.dwFrame % 300 == 0)

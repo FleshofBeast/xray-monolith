@@ -2,8 +2,9 @@
 #include "Protocol.h"
 #include <cstring>
 #include <limits>
+#include <array>
 namespace coopnet {
-// Held controls, not movement results. Simulation duration comes from the host clock.
+// Owner-simulated movement plus held controls for host combat and presentation.
 // Bits match native actor wishes: forward/back/strafe/crouch/accel/jump/sprint/lookout.
 constexpr std::uint16_t fire_button=0x8000, reload_button=0x0800;
 constexpr std::uint16_t input_buttons = 0xf8bf;
@@ -12,8 +13,14 @@ struct ActorInput {
     std::uint32_t generation = 0, level = 0, sequence = 0;
     std::uint16_t buttons = 0;
     float yaw = 0, pitch = 0;
+    bool owner_pose=false;
+    std::uint32_t motion_epoch=0;
+    std::uint16_t movement=0;
+    std::array<float,3> position{},velocity{};
 };
 inline bool valid_input(const ActorInput& value) {
+    for (float coordinate:value.position) if (!std::isfinite(coordinate) || std::abs(coordinate)>1000000.f) return false;
+    for (float speed:value.velocity) if (!std::isfinite(speed) || std::abs(speed)>1000.f) return false;
     return value.entity && value.generation && value.level && !(value.buttons & ~input_buttons) &&
         std::isfinite(value.yaw) && std::isfinite(value.pitch) &&
         std::abs(value.yaw) <= 3.141593f && std::abs(value.pitch) <= 1.570797f;
@@ -26,6 +33,10 @@ inline std::vector<std::uint8_t> encode_input(const ActorInput& value) {
     writer.integer(value.level, 4); writer.integer(value.sequence, 4); writer.integer(value.buttons, 2);
     for (const auto number : {value.yaw,value.pitch}) {
         std::uint32_t bits; std::memcpy(&bits,&number,sizeof(bits)); writer.integer(bits,4);
+    }
+    writer.integer(value.owner_pose ? 1 : 0,1); writer.integer(value.motion_epoch,4); writer.integer(value.movement,2);
+    for (const auto& vector:{value.position,value.velocity}) for (const auto number:vector) {
+        std::uint32_t bits; std::memcpy(&bits,&number,4); writer.integer(bits,4);
     }
     return writer.bytes;
 }
@@ -40,6 +51,13 @@ inline bool decode_input(const std::vector<std::uint8_t>& bytes, ActorInput& out
         std::uint64_t encoded;
         if (!reader.integer(encoded,4)) return false;
         const auto bits = static_cast<std::uint32_t>(encoded); std::memcpy(number,&bits,sizeof(bits));
+    }
+    std::uint64_t owner,epoch,movement;
+    if (!reader.integer(owner,1) || owner>1 || !reader.integer(epoch,4) || !reader.integer(movement,2)) return false;
+    value.owner_pose=owner!=0; value.motion_epoch=static_cast<std::uint32_t>(epoch); value.movement=static_cast<std::uint16_t>(movement);
+    for (auto* vector:{&value.position,&value.velocity}) for (auto& number:*vector) {
+        std::uint64_t encoded; if (!reader.integer(encoded,4)) return false;
+        const auto bits=static_cast<std::uint32_t>(encoded); std::memcpy(&number,&bits,4);
     }
     if (reader.remaining() || !valid_input(value)) return false;
     output = value; return true;

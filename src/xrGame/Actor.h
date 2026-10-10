@@ -580,6 +580,7 @@ public:
     void coopnet_down();
     void coopnet_revive(const Fvector& position);
     void coopnet_place(const Fvector& position,const Fvector& velocity);
+    void coopnet_owner_pose(const Fvector& position,const Fvector& velocity,u16 movement);
 	void coopnet_controls(u16 buttons, float yaw, float pitch);
     bool coopnet_import_movement(const Fvector& position,const Fvector& velocity,u32 delay_ms);
 	virtual void net_Export(NET_Packet& P); // export to server
@@ -598,6 +599,7 @@ protected:
 	Fvector NET_SavedAccel;
 	float NET_Jump = 0.f; // Pending impulse belongs to this actor, not the process.
 	bool m_coopnet_guest = false;
+    bool m_coopnet_owner_movement=false;
     bool m_coopnet_downed = false;
     bool m_coopnet_native_prediction=false;
     Fvector m_coopnet_view_correction = {0,0,0};

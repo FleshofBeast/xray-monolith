@@ -90,7 +90,7 @@ if ($MovementProbe) {
     }
     $motion = [regex]::Match($logs.host,'CoopNet guest simulation removed: inputs ([1-9]\d*) distance ([\d.]+)')
     if ($logs.host -notmatch 'CoopNet native guest bound:' -or !$motion.Success -or
-        $logs.guest -notmatch 'CoopNet owned native snapshots applied: [1-9]\d*' -or
+        $logs.guest -notmatch 'CoopNet owned native snapshots observed: [1-9]\d*' -or
         [double]::Parse($motion.Groups[2].Value,[Globalization.CultureInfo]::InvariantCulture) -lt 0.5) {
         throw 'Native guest spawn, real client input and physical displacement evidence missing.'
     }
@@ -325,12 +325,15 @@ if ($NameplateProbe) {
 }
 
 if ($WorldProbe -and $MovementProbe) {
-    if ($logs.guest -notmatch 'native physics correction completed' -or $logs.guest -notmatch 'native local movement controls applied') { throw 'Native physics correction or local prediction controls evidence missing' }
+    if ($logs.guest -notmatch 'owner snapshots observed without movement correction' -or $logs.guest -notmatch 'native local movement controls applied' -or
+        $logs.host -notmatch 'owner movement applied: object') { throw 'Native local-owner movement or host pose playback evidence missing' }
+    if ($logs.guest -match 'native correction queued|native physics correction completed') { throw 'Host still corrected ordinary guest movement' }
+    if ($WeaponProbe -and !$RespawnProbe -and !$PartyProbe -and $logs.host -notmatch 'owner movement probe: perturbed echoed position by 20 metres') { throw 'Owner echo rejection stimulus missing' }
     if (!$RespawnProbe -and !$PartyProbe -and !$FactionProbe) {
         $continuity=[regex]::Matches($logs.guest,'native camera continuity: samples ([0-9]+) discontinuities ([0-9]+) maximum step ([0-9.]+)')
         if (!$continuity.Count -or $continuity[$continuity.Count-1].Groups[2].Value -ne '0') { throw 'Native camera target continuity evidence missing or movement discontinuities detected' }
     }
-    Write-Output 'NATIVE_PREDICTION_PATH_PASS: local native movement controls and legacy physics correction pipeline both executed.'
+    Write-Output 'NATIVE_OWNER_MOVEMENT_PASS: guest native local physics controlled movement, host played owner poses, and echoed positions did not correct the guest.'
 }
 
 if ($FactionProbe) {

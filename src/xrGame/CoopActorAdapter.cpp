@@ -717,16 +717,30 @@ bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint6
     const float* position,const float* rotation,float health,const std::vector<coopnet::WorldAnimation>& animations,
     std::uint8_t zone_state,std::uint32_t zone_time) {
     if (!world_level_is_replica() || !g_pGameLevel->bReady) return false;
+    if (zone_state!=255) {
+        if (zone_state>=CCustomZone::eZoneStateMax) return false;
+        // Baseline loads can allocate different native IDs. Zones are stationary:
+        // bind only a unique existing zone at the authoritative world position.
+        Fvector point; point.set(position[0],position[1],position[2]);
+        CCustomZone* matched=nullptr; WorldObject* binding=nullptr;
+        for (auto& record:world_objects) {
+            auto* zone=smart_cast<CCustomZone*>(const_cast<CGameObject*>(record.first));
+            if (!zone || !record.second.replica || zone->getDestroy() ||
+                zone->Position().distance_to_sqr(point)>.0001f) continue;
+            if (record.second.authority && (record.second.authority!=incarnation || record.second.anchor!=anchor)) continue;
+            if (matched) return false;
+            matched=zone; binding=&record.second;
+        }
+        if (!matched) return false;
+        if (!binding->authority && coopnet::world_anchor(session_id,matched->ID())!=anchor)
+            Msg("* CoopNet anomaly baseline binding: section %s native %u host anchor %llu",matched->cNameSect().c_str(),matched->ID(),anchor);
+        binding->authority=incarnation; binding->anchor=anchor;
+        matched->CoopApplyState(zone_state,zone_time); return true;
+    }
     for (auto& record:world_objects) {
         auto* object=const_cast<CGameObject*>(record.first);
         if (!record.second.replica || object->getDestroy() || (record.second.anchor ? record.second.anchor : coopnet::world_anchor(session_id,object->ID()))!=anchor) continue;
         auto* entity=smart_cast<CEntityAlive*>(object);
-        if (zone_state!=255) {
-            auto* zone=smart_cast<CCustomZone*>(object);
-            if (!zone || zone_state>=CCustomZone::eZoneStateMax || (record.second.authority && record.second.authority!=incarnation)) return false;
-            record.second.authority=incarnation; record.second.anchor=anchor;
-            zone->CoopApplyState(zone_state,zone_time); return true;
-        }
         if (!entity || object->cast_actor() || (record.second.authority && record.second.authority!=incarnation)) return false;
         if (record.second.dead && health>0) return false;
         record.second.authority=incarnation; record.second.anchor=anchor;
@@ -2604,6 +2618,13 @@ void guest_input_simulated(std::uint16_t object) {
 }
 std::uint32_t guest_input_acknowledgement(std::uint16_t object) {
     const auto found=guests.find(object); return found==guests.end() ? 0 : found->second.simulated_input;
+}
+bool apply_guest_owner_pose(std::uint16_t object,const float* position,const float* velocity,std::uint16_t movement) {
+    LocalActorPose pose; if (!capture_guest_actor(object,pose) || object==mutant_probe_stationary) return false;
+    auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(object));
+    if (!actor || actor->is_coopnet_downed()) return false;
+    Fvector point,speed; point.set(position[0],position[1],position[2]); speed.set(velocity[0],velocity[1],velocity[2]);
+    actor->coopnet_owner_pose(point,speed,movement); return true;
 }
 void control_guest_actor(std::uint16_t object, std::uint16_t buttons, float yaw, float pitch) {
     LocalActorPose pose;

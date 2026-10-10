@@ -9,13 +9,19 @@ void check(bool value, int line) {
 int main() {
     ActorInput input{20,1,10,0xfffffffeu,1,1.f,.5f}, decoded;
     const auto bytes = encode_input(input);
-    require(bytes.size() == 30 && decode_input(bytes,decoded) && decoded.buttons == 1 && decoded.yaw == 1.f);
+    require(bytes.size() == 61 && decode_input(bytes,decoded) && decoded.buttons == 1 && decoded.yaw == 1.f);
     for (std::size_t size = 0; size < bytes.size(); ++size)
         require(!decode_input({bytes.begin(),bytes.begin() + size},decoded));
     auto malformed = bytes; malformed.push_back(0); require(!decode_input(malformed,decoded));
     malformed = bytes; malformed[20] = 0x40; require(!decode_input(malformed,decoded)); // simulation turn state
     malformed = bytes; malformed[24] = 0x80; malformed[25] = 0x7f; require(!decode_input(malformed,decoded)); // infinity
     auto invalid = input; invalid.pitch = 2; require(!valid_input(invalid));
+    auto owned=input; owned.owner_pose=true; owned.motion_epoch=123; owned.movement=5;
+    owned.position={1,2,3}; owned.velocity={4,5,6};
+    require(decode_input(encode_input(owned),decoded) && decoded.owner_pose && decoded.motion_epoch==123 && decoded.movement==5 && decoded.position==owned.position && decoded.velocity==owned.velocity);
+    invalid=owned; invalid.position[0]=std::numeric_limits<float>::quiet_NaN(); require(!valid_input(invalid));
+    invalid=owned; invalid.velocity[1]=1001; require(!valid_input(invalid));
+    malformed=encode_input(owned); malformed[30]=2; require(!decode_input(malformed,decoded));
     auto armed=input; armed.buttons=fire_button|reload_button;
     require(decode_input(encode_input(armed),decoded) && decoded.buttons==armed.buttons);
     invalid = input; invalid.yaw = 4; require(!valid_input(invalid));

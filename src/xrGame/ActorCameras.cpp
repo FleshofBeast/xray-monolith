@@ -607,7 +607,7 @@ void CActor::cam_Update(float dt, float fFOV)
 	// calc point
 	xform.transform_tiny(point);
 	if(m_coopnet_native_prediction) point.add(m_coopnet_view_correction);
-    if(m_coopnet_native_prediction) {
+    if(m_coopnet_native_prediction || engine_coopnet::guest_settings_locked()) {
         static CActor* previous_actor=nullptr;
         static Fvector previous_point;
         static u32 previous_time=0,samples=0,discontinuities=0;

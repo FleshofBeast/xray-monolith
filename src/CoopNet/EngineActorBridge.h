@@ -164,6 +164,7 @@ bool claim_guest_spawn(std::uint16_t object);
 void guest_actor_destroyed(std::uint16_t object);
 bool capture_guest_actor(std::uint16_t object, LocalActorPose& pose);
 void control_guest_actor(std::uint16_t object, std::uint16_t buttons, float yaw, float pitch);
+bool apply_guest_owner_pose(std::uint16_t object,const float* position,const float* velocity,std::uint16_t movement);
 void remove_guest_actor(std::uint16_t object);
 void clear_guest_actors();
 void guest_level_stopped();

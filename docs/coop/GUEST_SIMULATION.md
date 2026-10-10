@@ -27,6 +27,13 @@ implementation for X-Ray's animation, physics, Lua or ALife systems.
 
 ## Current changes under validation
 
+- Protocol 31 gives the guest ownership of ordinary player movement. Its native
+  local controls and physics send position, velocity and movement state to the
+  host. The host interpolates that representation with a 50 ms buffer rather than
+  integrating the guest's movement a second time. Returned host poses do not
+  correct the guest's own character. Initial placement, map travel and respawn
+  remain explicit host actions; a respawn epoch rejects delayed pre-respawn poses.
+  Host health, combat outcomes and shared-world authority remain unchanged.
 - Protocol 29 world poses carry up to four native base-channel animation cycles,
   with motion slot/index, phase, speed and stop state. Guests play these cycles
   and advance native animation tracks locally. Matching model and motion assets
