@@ -5,12 +5,19 @@
 #include "SharedWorld.h"
 #include "Radio.h"
 #include "Dialogue.h"
+#include "WorldHit.h"
 class CObject;
 class CGameObject;
 class CSE_Abstract;
 class ISheduled;
+struct SHit;
 struct GAME_NEWS_DATA;
 namespace engine_coopnet {
+bool intercept_world_hit(CGameObject* target,const SHit& hit);
+bool peek_world_hit(coopnet::WorldHit& hit);
+void discard_world_hit();
+bool apply_world_hit(std::uint64_t session,std::uint16_t actor,const coopnet::WorldHit& hit);
+void exercise_shared_hit_probe();
 // Owner-thread save/load adapter. Names originate locally, never from network payloads.
 bool capture_world_baseline(const char* name,std::uint32_t& level,std::vector<std::uint8_t>& bytes);
 bool store_world_baseline(const char* name,const std::vector<std::uint8_t>& bytes);

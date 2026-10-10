@@ -453,7 +453,7 @@ bool CShootingObject::SendHitAllowed(CObject* pUser)
 {
     if (engine_coopnet::passive_world_replica()) return false;
     if (auto* actor=smart_cast<CActor*>(pUser))
-        if (actor->is_coopnet_guest() && engine_coopnet::shared_world_active()) return OnServer();
+        if (actor->is_coopnet_guest() && engine_coopnet::shared_world_active()) return !engine_coopnet::native_world_requested() && OnServer();
 	if (Game().IsServerControlHits())
 		return OnServer();
 

@@ -459,3 +459,22 @@ recreation, quest snapshot exclusion, normal shutdown and unchanged private save
 Shared guest-originated hits, complete personal quest restoration and persistent
 instanced loot remain unfinished; this is not a release-ready world rewrite.
 See [native world rework](NATIVE_WORLD_REWORK.md) for evidence and the test command.
+
+## Guest-originated shared hits (protocol 32, development mode)
+
+The opt-in native-world path now intercepts guest NPC hit events before local
+condition changes and reliably sends the shared target lifetime and native damage
+parameters to the host. Ownership, generation, level readiness, respawn epoch,
+sequence, bounds, target lifetime, native bones and range are checked before
+native host damage. Host guest-weapon playback cannot apply duplicate damage.
+Queued hits are cleared on travel teardown and respawn. Host health/death flows
+back through existing world snapshots.
+
+Final DX11 build and all 21 suites passed, including hit replay/ownership/bounds
+and bounded bursts. A 120-second native run passed guest GE_HIT interception with
+unchanged local condition before confirmation, exactly one host hit taking the
+same enemy from 100% to zero health, and shared guest death/removal. Trader
+recreation, quest snapshot exclusion and private save/shutdown checks passed.
+This fixture injects a native event; natural aimed firing, complete combat,
+personal quest restoration and durable instanced loot still need integration and
+validation. Installed clients and public releases remain unchanged.

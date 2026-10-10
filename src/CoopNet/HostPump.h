@@ -6,6 +6,7 @@
 #include "ActorAppearance.h"
 #include "LevelAssignment.h"
 #include "ActorInput.h"
+#include "WorldHit.h"
 #include "Gameplay.h"
 #include "InventoryView.h"
 #include "WorldBaseline.h"
@@ -40,6 +41,8 @@ class HostPump {
         double transfer_time = 0;
         ActorInput input;
         SequenceWindow inputs;
+        SequenceWindow hits;
+        double hit_budget=128;
         double input_age = 1;
         struct Transaction { InventoryRequest request; InventoryResult result; };
         std::deque<Transaction> transactions;
@@ -82,6 +85,7 @@ class HostPump {
     std::deque<LevelFailure> failures_;
     std::map<Identity,ItemState> items_;
     std::function<InventoryResult(Identity,const InventoryRequest&)> inventory_handler_;
+    std::function<void(Identity,const WorldHit&)> hit_handler_;
     std::function<DialogueView(Identity,const DialogueRequest&,std::uint32_t)> dialogue_handler_;
     std::function<RespawnResult(Identity,const RespawnRequest&)> respawn_handler_;
     std::function<bool(Identity,const InventoryView&)> character_handler_;
@@ -189,6 +193,19 @@ class HostPump {
                 if (!peer.assigned) continue; // exact duplicate or cancelled transfer cannot restore interest
                 peer.assigned = false;
                 if (!set_interest_level(peer.player, ready.level)) return false;
+            }
+            else if (peer.ready && frame.message == Message::WorldHit) {
+                WorldHit hit;
+                if (!decode_world_hit(frame.payload,hit) || hit.sequence!=frame.sequence) return false;
+                const auto actor=actors_.find(hit.actor);
+                if (actor==actors_.end()) continue;
+                if (actor->second.player!=peer.player) return false;
+                if (actor->second.generation!=hit.generation || actor->second.level!=hit.level ||
+                    peer.level!=hit.level || peer.assigned || (peer.baseline.id && !peer.baseline_received)) continue;
+                if (!peer.hits.accept(hit.sequence)) continue;
+                if (peer.hit_budget<1) continue;
+                peer.hit_budget-=1;
+                if (hit_handler_) hit_handler_(peer.player,hit);
             }
             else if (peer.ready && frame.message == Message::ActorInput) {
                 ActorInput input;
@@ -392,6 +409,7 @@ public:
         return false;
     }
     void set_respawn_handler(std::function<RespawnResult(Identity,const RespawnRequest&)> handler) { respawn_handler_=std::move(handler); }
+    void set_world_hit_handler(std::function<void(Identity,const WorldHit&)> handler) { hit_handler_=std::move(handler); }
     void set_inventory_handler(std::function<InventoryResult(Identity,const InventoryRequest&)> handler) {
         inventory_handler_=std::move(handler);
     }
@@ -591,6 +609,7 @@ public:
             auto& peer = *it;
             peer.elapsed += elapsed;
             peer.input_age += elapsed;
+            peer.hit_budget=(std::min)(128.,peer.hit_budget+elapsed*128.);
             peer.transaction_budget=(std::min)(8.,peer.transaction_budget+elapsed*8.);
             if (peer.baseline.id && !peer.baseline_received) {
                 peer.baseline_time+=elapsed;

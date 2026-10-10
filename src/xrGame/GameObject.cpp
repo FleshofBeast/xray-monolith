@@ -232,6 +232,7 @@ void CGameObject::OnEvent(NET_Packet& P, u16 type)
 				}
 				break;
 			}
+			if (engine_coopnet::intercept_world_hit(this,HDS)) break;
 			SetHitInfo(Hitter, Weapon, HDS.bone(), HDS.p_in_bone_space, HDS.dir);
 			Hit(&HDS);
 			//---------------------------------------------------------------------------

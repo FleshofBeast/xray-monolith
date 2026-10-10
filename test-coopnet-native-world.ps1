@@ -6,7 +6,7 @@ $source=Join-Path (Split-Path $repo) 'Anomaly-1.5.3/appdata/savedgames'
 $hashes=@{};Get-ChildItem $source -Filter 'player - autosave.*' -File | ForEach-Object {$hashes[$_.FullName]=(Get-FileHash $_.FullName).Hash}
 $owned=@()
 try {
- $owned=@(& "$repo/prepare-coopnet-engine-test.ps1" -Launch -LoadFixture -ReplicaProbe -MovementProbe -WorldProbe -WeaponProbe -SharedWorldProbe -NativeWorldProbe -TestDirectory $root)
+ $owned=@(& "$repo/prepare-coopnet-engine-test.ps1" -Launch -LoadFixture -ReplicaProbe -MovementProbe -WorldProbe -WeaponProbe -SharedWorldProbe -NativeWorldProbe -SharedHitProbe -TestDirectory $root)
  if($owned.Count -ne 2){throw 'Expected exactly two fixture processes'}
  $watch=[Diagnostics.Stopwatch]::StartNew()
  while($watch.Elapsed.TotalSeconds -lt 120){foreach($process in $owned){if($process.HasExited){throw "Fixture exited early: $($process.Id) code $($process.ExitCode)"}};Start-Sleep -Milliseconds 500}
@@ -26,6 +26,9 @@ $dogAnchor=$dogMatch.Groups[1].Value
 if(!$logs.guest.Contains("CoopNet NPC death applied: anchor $dogAnchor") -or !$logs.guest.Contains("CoopNet NPC removed: anchor $dogAnchor section dog_weak")){throw 'Shared enemy death/removal did not match its spawned identity'}
 if($logs.guest -notmatch 'CoopNet NPC spawned:[^\r\n]*trader 1 visible 1'){throw 'Native trader recreation missing'}
 if($logs.guest.Contains('CoopNet quests applied:')){throw 'Personal-quest mode applied a host quest snapshot'}
+if(!$logs.guest.Contains("CoopNet shared hit probe: native guest hit queued without local damage target $dogAnchor")){throw 'Native guest hit interception missing'}
+$appliedHits=[regex]::Matches($logs.host,"CoopNet shared guest hit applied: target $dogAnchor sequence \d+ health ([\d.-]+) -> ([\d.-]+)")
+if($appliedHits.Count -ne 1 -or [double]$appliedHits[0].Groups[2].Value -gt 0){throw 'Guest hit did not kill the shared enemy exactly once on the host'}
 if($cleanupErrors.Count){throw ($cleanupErrors -join '; ')}
 Write-Output "NATIVE_WORLD_PROTOTYPE_PASS: $root; native NPC frames completed, both clients closed, source saves unchanged. Personal quests/loot persistence and combat synchronization remain unverified."
 

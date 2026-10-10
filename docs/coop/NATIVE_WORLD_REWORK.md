@@ -58,7 +58,8 @@ finished TES3MP equivalent. Required work before making it the normal join path:
 
 - Capture/restore the player's complete native quest and script state before a
   host baseline is loaded; persist it with the character and across travel.
-- Relay client-owned health, equipment and hit results to shared representations.
+- Relay client-owned health and equipment to shared representations; validate
+  guest-originated shared hits in native gameplay.
 - Apply host behavior instructions without competing independent NPC decisions;
   interpolate shared poses through the native movement/animation systems.
 - Preserve per-character corpse/container contents and claims across rejoin,
@@ -87,3 +88,33 @@ Run `powershell -ExecutionPolicy Bypass -File .\test-coopnet-native-world.ps1`
 after a DX11 CoopNet build. This uses isolated appdata and the explicit
 `-coop_native_world` development flag. Installed clients and release assets have
 not been replaced by this checkpoint.
+
+## Shared hit development path (protocol 32)
+
+Native guest GE_HIT events against shared NPCs are intercepted before local
+damage. A bounded reliable hit message carries the requesting actor binding,
+level, respawn epoch, target anchor/lifetime, damage, direction, bone, impulse,
+armor penetration and native aim/wound flags. The host verifies ownership,
+generation, level readiness and monotonic sequence, limits hit bursts, then checks
+target lifetime, native bone bounds, living actors and range before calling the
+target's native Hit implementation. Host weapon playback for guest actors cannot
+apply a second hit in this development mode. Normal world snapshots carry health
+and death back to clients. Queued hits are cleared on location teardown/respawn.
+
+The host relies on the guest's collision report; independent host trajectory
+validation and remote hit-reaction playback are not implemented. The native
+fixture injects an explicit GE_HIT event against a host-created enemy to exercise
+the actual interception, transport and native damage path; it does not establish
+natural aimed firing or internet behavior. This remains opt-in and unpublished.
+
+Validation: the final DX11 build passed (`_build/shared-hit-build2.log`) and all
+21 suites passed (`_build/shared-hit-unit3.log`), including malformed/truncated
+hits, bounded fields/flags, ownership, replay, sequence wrap, stale generations,
+burst limits and budget refill. The 120-second two-client run passed
+(`_build/shared-hit-native1.log`, fixture
+`native-world-583afdbcb87446279d17c7fabdb28ec5`). The native guest event left local
+health unchanged before confirmation, one host hit changed that same enemy from
+1.000 to 0.000, and the guest applied its shared death and removal. Native trader
+recreation, quest snapshot exclusion, clean shutdown and unchanged private source
+save hashes also passed. Complete personal quest/loot persistence and natural
+combat remain unverified.

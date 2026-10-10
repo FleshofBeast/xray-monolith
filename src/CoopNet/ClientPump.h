@@ -6,6 +6,7 @@
 #include "ActorAppearance.h"
 #include "LevelAssignment.h"
 #include "ActorInput.h"
+#include "WorldHit.h"
 #include "Gameplay.h"
 #include "InventoryView.h"
 #include "WorldBaseline.h"
@@ -225,6 +226,15 @@ public:
         const auto result = transport_->send(Frame{Message::ActorInput, Channel::Actor, Delivery::UnreliableSequenced,
             input.sequence, encode_input(input)});
         if (result != SendResult::Sent && result != SendResult::Backpressure) lost();
+        return result;
+    }
+    SendResult send_world_hit(const WorldHit& hit) {
+        if (!transport_ || session_.state()!=ClientState::Connected || !level_ready_sent_) return SendResult::Disconnected;
+        const auto* actor=actors_.find(hit.actor);
+        if (!valid_world_hit(hit) || !actor || actor->player!=session_.welcome().player ||
+            actor->generation!=hit.generation || actor->level!=hit.level || assignment_.level!=hit.level) return SendResult::Invalid;
+        const auto result=transport_->send({Message::WorldHit,Channel::Combat,Delivery::ReliableOrdered,hit.sequence,encode_world_hit(hit)});
+        if (result!=SendResult::Sent && result!=SendResult::Backpressure) lost();
         return result;
     }
     const ClientSession& session() const { return session_; }

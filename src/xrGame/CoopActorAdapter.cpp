@@ -417,6 +417,9 @@ void options_function(lua_State* state,const char* name) {
 }
 struct WorldObject { std::uint64_t incarnation=0; bool replica=false, animated=false; std::uint64_t authority=0,anchor=0; bool dead=false; };
 xr_map<const CGameObject*,WorldObject> world_objects;
+std::deque<coopnet::WorldHit> local_world_hits;
+std::uint32_t local_hit_sequence=0;
+bool shared_hit_probe_fired=false;
 std::uint64_t world_incarnation=0, replica_frames=0, replica_schedules=0;
 unsigned world_replica_count=0;
 bool collect_world_objects=false;
@@ -712,6 +715,61 @@ void capture_guest_disposition(std::uint64_t session,std::uint16_t object,coopne
         view.npc_disposition.emplace_back(coopnet::world_anchor(session,object->ID()),
             RELATION_REGISTRY().GetAttitude(npc,static_cast<CInventoryOwner*>(actor)));
         if (view.npc_disposition.size()==128) break;
+    }
+}
+bool intercept_world_hit(CGameObject* target,const SHit& hit) {
+    if (!guest_native_world() || !target || target->cast_actor()) return false;
+    const auto binding=world_objects.find(target);
+    if (binding==world_objects.end() || !binding->second.replica || !smart_cast<CEntityAlive*>(target)) return false;
+    if (hit.who!=g_actor || !g_actor || !g_actor->g_Alive() || !binding->second.authority ||
+        !binding->second.anchor || local_world_hits.size()>=128) return true;
+    coopnet::WorldHit h; h.actor=1; h.generation=1; h.level=1;
+    h.target=binding->second.anchor; h.incarnation=binding->second.authority; h.sequence=++local_hit_sequence;
+    h.power=hit.power; h.impulse=hit.impulse; h.armor_piercing=hit.armor_piercing;
+    h.aim_bullet=hit.aim_bullet; h.add_wound=hit.add_wound;
+    h.bone=hit.boneID; h.type=static_cast<std::uint8_t>(hit.hit_type);
+    h.direction={hit.dir.x,hit.dir.y,hit.dir.z}; h.bone_position={hit.p_in_bone_space.x,hit.p_in_bone_space.y,hit.p_in_bone_space.z};
+    if (coopnet::valid_world_hit(h)) { local_world_hits.push_back(h); Msg("* CoopNet local shared hit queued: target %llu sequence %u",h.target,h.sequence); }
+    return true;
+}
+bool peek_world_hit(coopnet::WorldHit& hit) { if (local_world_hits.empty()) return false; hit=local_world_hits.front(); return true; }
+void discard_world_hit() { if (!local_world_hits.empty()) local_world_hits.pop_front(); }
+bool apply_world_hit(std::uint64_t session_id,std::uint16_t actor_id,const coopnet::WorldHit& hit) {
+    if (!native_world_requested() || world_level_is_replica() || !g_pGameLevel || !coopnet::valid_world_hit(hit)) return false;
+    auto* actor=smart_cast<CActor*>(Level().Objects.net_Find(actor_id));
+    if (!actor || !actor->is_coopnet_guest() || !actor->g_Alive() || actor->is_coopnet_downed()) return false;
+    for (const auto& binding:world_objects) {
+        auto* target=smart_cast<CEntityAlive*>(const_cast<CGameObject*>(binding.first));
+        if (!target || target->cast_actor() || binding.second.replica || target->getDestroy() ||
+            binding.second.incarnation!=hit.incarnation || coopnet::world_anchor(session_id,target->ID())!=hit.target) continue;
+        if (!target->g_Alive() || target->AlreadyDie() || actor->Position().distance_to_sqr(target->Position())>1000000.f) return false;
+        auto* skeleton=target->Visual() ? target->Visual()->dcast_PKinematics() : nullptr;
+        if (hit.bone!=0xffff && (!skeleton || hit.bone>=skeleton->LL_BoneCount())) return false;
+        Fvector direction,point; direction.set(hit.direction[0],hit.direction[1],hit.direction[2]);
+        point.set(hit.bone_position[0],hit.bone_position[1],hit.bone_position[2]);
+        SHit native(hit.power,direction,actor,hit.bone,point,hit.impulse,static_cast<ALife::EHitType>(hit.type),hit.armor_piercing,hit.aim_bullet);
+        native.add_wound=hit.add_wound;
+        const auto previous=target->GetfHealth(); target->Hit(&native);
+        Msg("* CoopNet shared guest hit applied: target %llu sequence %u health %.3f -> %.3f",hit.target,hit.sequence,previous,target->GetfHealth());
+        return true;
+    }
+    return false;
+}
+void exercise_shared_hit_probe() {
+    if (!guest_native_world() || !strstr(Core.Params,"-coop_shared_hit_probe") || shared_hit_probe_fired || !g_actor) return;
+    for (const auto& binding:world_objects) {
+        auto* target=smart_cast<CEntityAlive*>(const_cast<CGameObject*>(binding.first));
+        if (!target || !binding.second.replica || !binding.second.authority || !binding.second.anchor ||
+            !target->g_Alive() || xr_strcmp(target->cNameSect().c_str(),"dog_weak")) continue;
+        Fvector direction,point; direction.set(0,0,1); point.set(0,0,0);
+        SHit hit(10.f,direction,g_actor,0,point,0.f,ALife::eHitTypeFireWound,1.f,false);
+        auto* active=g_actor->inventory().ActiveItem(); hit.weaponID=active ? active->object().ID() : 0xffff;
+        NET_Packet packet; hit.Write_Packet_Cont(packet); packet.r_pos=0;
+        const auto before=target->GetfHealth(); target->OnEvent(packet,GE_HIT);
+        if (target->GetfHealth()!=before || local_world_hits.empty()) throw std::runtime_error("Shared hit probe changed guest condition before host confirmation");
+        shared_hit_probe_fired=true;
+        Msg("* CoopNet shared hit probe: native guest hit queued without local damage target %llu",binding.second.anchor);
+        return;
     }
 }
 bool apply_world_object(std::uint64_t session_id,std::uint64_t anchor,std::uint64_t incarnation,
@@ -1485,7 +1543,7 @@ void exercise_shared_world_probe(double elapsed,unsigned& phase,double& wait,std
         manager.CoopTasksChanged(); phase=1; wait=0; Msg("* CoopNet shared probe: host NPC and quests created");
     } else if (phase==1) {
         auto* entity=smart_cast<CEntityAlive*>(Level().Objects.net_Find(object)); if (!entity) throw std::runtime_error("Shared probe NPC missing before death");
-        entity->SetfHealth(0.f); entity->KillEntity(g_actor->ID(),TRUE);
+        if (entity->g_Alive() && !entity->AlreadyDie()) { entity->SetfHealth(0.f); entity->KillEntity(g_actor->ID(),TRUE); }
         manager.HasGameTask(shared_str("coopnet_probe_quest"),false)->ApplyCoopState(eTaskStateCompleted);
         manager.HasGameTask(shared_str("coopnet_probe_fail"),false)->ApplyCoopState(eTaskStateFail);
         manager.CoopTasksChanged(); phase=2; wait=0; Msg("* CoopNet shared probe: host NPC killed and quests completed/failed");
@@ -1582,6 +1640,8 @@ bool schedule_world_replica(ISheduled* scheduled,std::uint32_t elapsed) {
     ++replica_schedules; return true;
 }
 void world_level_stopped() {
+    local_world_hits.clear();
+    shared_hit_probe_fired=false;
     while (!native_guest_script_records.empty()) erase_native_guest_script_record(*native_guest_script_records.begin());
     native_dialogue_reward_probe=false; native_dialogue_reward_item=0xffff; native_dialogue_reward_actor=0xffff; native_dialogue_reward_stage=0;
     while (!native_dialogues.empty()) cancel_native_dialogue(native_dialogues.begin()->first);
@@ -1699,6 +1759,7 @@ bool respawn_actor(std::uint16_t object,std::uint32_t level,const float* positio
     Fvector target; target.set(position[0],position[1],position[2]);
     const auto node=ai().level_graph().vertex(actor->ai_location().level_vertex_id(),target);
     if (!ai().level_graph().valid_vertex_id(node)) return false;
+    if (actor==g_actor) local_world_hits.clear();
     actor->coopnet_revive(target); return true;
 }
 bool capture_actor_condition(std::uint16_t object, ActorConditionState& state) {

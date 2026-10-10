@@ -1423,6 +1423,19 @@ void update(double) {
             if (session->container_probe) exercise_local_container_probe();
             if (session->inventory_probe) exercise_local_inventory_probe();
             if (session->client.session().state()==coopnet::ClientState::Connected) {
+                if (guest_native_world()) {
+                    exercise_shared_hit_probe();
+                    coopnet::ActorPresence owned;
+                    session->client.actors().visit([&](const coopnet::ActorPresence& a) { if (a.player==session->client.session().welcome().player) owned=a; });
+                    coopnet::WorldHit hit; unsigned sent=0;
+                    while (owned.entity && session->placed_entity==owned.entity && session->placed_generation==owned.generation &&
+                        sent<128 && peek_world_hit(hit)) {
+                        hit.actor=owned.entity; hit.generation=owned.generation; hit.level=owned.level; hit.motion_epoch=session->local_motion_epoch;
+                        const auto result=session->client.send_world_hit(hit);
+                        if (result==coopnet::SendResult::Backpressure || result==coopnet::SendResult::Disconnected) break;
+                        discard_world_hit(); ++sent;
+                    }
+                }
                 if (!session->native_inventory_pending) session->native_inventory_pending=pop_local_inventory_action(session->native_inventory_action);
                 if (session->native_inventory_pending) {
                     coopnet::ActorPresence owned;
@@ -1630,6 +1643,12 @@ void command(const char* name, const char* arguments) {
             });
             next->host.set_inventory_handler([owner](coopnet::Identity player,const coopnet::InventoryRequest& request) {
                 return transact_inventory(*owner,player,request);
+            });
+            next->host.set_world_hit_handler([owner](coopnet::Identity player,const coopnet::WorldHit& hit) {
+                const auto guest=owner->guests.find(player);
+                if (guest==owner->guests.end() || guest->second.entity!=hit.actor || guest->second.generation!=hit.generation ||
+                    guest->second.motion_epoch!=hit.motion_epoch || owner->party_loading) return;
+                apply_world_hit(owner->host.identity(),guest->second.object,hit);
             });
             next->host.set_resume_character_handler([owner](coopnet::Identity player,coopnet::Identity character) {
                 bool matches=false;
