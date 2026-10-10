@@ -8,7 +8,7 @@ Get the required base game: [Anomaly 1.5.3 full download on ModDB](https://www.m
 
 **Looking to play CoopNet? Start with the [installation and multiplayer setup guide](INSTALL-COOPNET.md).** It covers building the `coopnet` branch, installing into Anomaly 1.5.3, hosting, joining, and UDP port forwarding. This source repository is not a full game download; the CoopNet guide takes precedence over the inherited upstream executable installation instructions below.
 
-**[Download the compiled DX11 early-test build](https://github.com/FleshofBeast/FOBs-Anomaly-CoopNet/releases/tag/coopnet-early-test-guest-ui-saves)** — no compiler required. Choose the `FOBs-Anomaly-CoopNet-EarlyTest-DX11-GuestUI-Saves.zip` asset and follow its `INSTALL.txt`. All players need the same package; the Anomaly 1.5.3 base game is still required separately.
+**[Download the compiled DX11 early-test build](https://github.com/FleshofBeast/FOBs-Anomaly-CoopNet/releases/tag/coopnet-early-test-spectator-respawn)** — no compiler required. Choose the `FOBs-Anomaly-CoopNet-EarlyTest-DX11-Spectator-Respawn.zip` asset and follow its `INSTALL.txt`. All players need the same package; the Anomaly 1.5.3 base game is still required separately.
 
 ## CoopNet: host, join, and port forwarding
 
@@ -42,7 +42,7 @@ TCP forwarding is not required for this direct UDP connection. Guests do not nee
 
 Use `coop_disconnect` to leave or stop hosting. When downed, click a living teammate's name to spectate them in third person. A/D cycles living teammates; Enter respawns at the currently spectated teammate's current position. Downed teammates are unavailable, and everyone being downed disables respawn. `coop_respawn` also works from the console. The host controls the shared world settings and the party travels between locations together. See [CoopNet progress](docs/coop/PROGRESS.md) for tested features and remaining gameplay work.
 
-Other players see your equipped native outfit/body model and the weapon you currently have drawn. Outfit and weapon changes, holstering, and native attachment-bone visibility update during the session. Reconnecting guests receive the current appearance. These updates use protocol 27; all players must install the matching build.
+Other players see your equipped native outfit/body model and the weapon you currently have drawn. Outfit and weapon changes, holstering, and native attachment-bone visibility update during the session. Reconnecting guests receive the current appearance. These updates use protocol 28; all players must install the matching build.
 
 Teammates see your **Options → Gameplay → General → Player name** above your character's head. Name changes update during play. A dot to the left shows that player's host-validated health: **black** at 0%, **red** above 0% through 25%, **orange** above 25% through 50%, **yellow** above 50% and below 90%, and **green** at 90%–100%. Black dots have a pale outline for visibility. Nameplates appear for other players in the current location; your own nameplate is hidden. Displayed names are limited to 64 bytes. Both clients need the matching protocol-27 build.
 
